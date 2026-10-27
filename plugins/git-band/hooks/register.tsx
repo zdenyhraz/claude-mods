@@ -1,23 +1,75 @@
 import { atom, read, update } from 'claude-code'
-import type { Color, EngineInterface, ProcessRunResult, Register, RenderElement, RenderNode, SessionContextUsage, SessionRateLimit } from 'claude-code'
+import type { Color, EngineInterface, ProcessRunResult, Register, RenderElement, RenderNode, SessionContextUsage, SessionRateLimit, Timer, ToolCallResult } from 'claude-code'
 
-import type { AgentView, GitStatus, UsageView } from '../types'
+import type { ActivityView, AgentView, GitStatus, TurnPhase, UsageView } from '../types'
 import { parseBranch, parseFiles, parseLayout, parseShortstat, repoName, worktreeName } from './git'
 import type { Layout } from './git'
-import { agentTime, describeAgents, describeContext, describeTop, detailsOf, drawAgents, drawContext, drawTop, groupsOf, isActive, kilo, limitName, limitTone, orderAgents, sliceTones, stateOf } from './look'
+import {
+  agentTime,
+  agoChangesIn,
+  describeAgents,
+  describeContext,
+  describeItems,
+  describeStatus,
+  describeTop,
+  detailsOf,
+  drawAgents,
+  drawContext,
+  drawSince,
+  drawStatus,
+  drawStripe,
+  drawTop,
+  groupsOf,
+  isActive,
+  kilo,
+  limitName,
+  limitTone,
+  orderAgents,
+  sessionHue,
+  sinceOf,
+  sliceTones,
+  stateOf,
+  statusOf,
+  hueKey,
+  STRIPE_WIDTH,
+  WORKTREE_HUES,
+} from './look'
 import type { CompactMode } from './compact-button'
-import type { Dashboard, Icon, Image, Tone } from './look'
+import type { Dashboard, Icon, Image, Item, Tone } from './look'
+import {
+  NO_ACTIVITY,
+  applyPlanUpdate,
+  commandOf,
+  describeTool,
+  editedPath,
+  firstPrompt,
+  goalOf,
+  pickHue,
+  shortPath,
+  todosOf,
+  waitsFor,
+  withCommand,
+  withEdit,
+  withHue,
+} from './session'
+import type { HueTable, ToolArgs } from './session'
 
 const SETTLE_MS = 300
 const TICK_MS = 5_000
 // An estimate of a cell's width in CSS pixels on the desktop. The images fill the band's real width whatever it
-// is; the estimate only decides how many agent cards go to a row, and what an image shows if its CSS is dropped.
+// is; the estimate only decides how many agent cards go to a row, where the goal is cut, and what an image shows
+// if its CSS is dropped.
 const PX_PER_COLUMN = 7.6
 const REFRESHING_TOOLS = /^(Bash|PowerShell|Edit|Write|NotebookEdit|EnterWorktree|ExitWorktree)$/
 
 const status = atom({ plugin: 'git-band', key: 'status' } as const, null)
 const usage = atom({ plugin: 'git-band', key: 'usage' } as const, null)
 const agents = atom({ plugin: 'git-band', key: 'agents' } as const, [])
+const goal = atom({ plugin: 'git-band', key: 'goal' } as const, null)
+const turn = atom({ plugin: 'git-band', key: 'turn' } as const, { phase: 'idle', detail: '', at: 0 })
+const plan = atom({ plugin: 'git-band', key: 'plan' } as const, [])
+const activity = atom({ plugin: 'git-band', key: 'activity' } as const, NO_ACTIVITY)
+const hue = atom({ plugin: 'git-band', key: 'hue' } as const, null)
 
 // The terminal draws text alone, so each tone of the desktop's image maps to the theme key nearest it.
 const THEME_KEYS: Record<Tone, Color> = {
@@ -33,12 +85,26 @@ const THEME_KEYS: Record<Tone, Color> = {
   teal: 'planMode',
   sky: 'ide',
   pink: 'bashBorder',
+  tan: 'warning',
+  coral: 'claude',
   gray: 'inactive',
   free: 'subtle',
   line: 'subtle',
+  ink: 'inverseText',
 }
 
-const GLYPHS: Partial<Record<Icon, string>> = { repo: '▤', worktree: '⑂', branch: '⎇' }
+const GLYPHS: Partial<Record<Icon, string>> = {
+  repo: '▤',
+  worktree: '⑂',
+  branch: '⎇',
+  running: '●',
+  waiting: '◐',
+  done: '✓',
+  failed: '✕',
+  queued: '○',
+  goal: '◎',
+  history: '↺',
+}
 
 // The compact control's cells beside the context row's image.
 const COMPACT_COLUMNS = 9
@@ -62,6 +128,8 @@ function cachedImage(row: string, key: string, draw: () => Image): Image {
 
 let compactMode: CompactMode = 'ready'
 let isTurnRunning = false
+// The question a turn's wrap-up left for the person, shown as what the session waits on once the turn ends.
+let pendingAsk: string | null = null
 
 function setCompactMode($: EngineInterface, mode: CompactMode): void {
   compactMode = mode
@@ -167,6 +235,10 @@ async function refresh($: EngineInterface): Promise<void> {
         lastJson = json
         await update($, status, () => fresh)
         $.ui.invalidate('ui.render')
+      }
+
+      if (fresh) {
+        await claimHue($, fresh).catch(() => undefined)
       }
     } while (isQueued)
   } finally {
@@ -275,6 +347,176 @@ async function dropFinished($: EngineInterface): Promise<void> {
   await update($, agents, current => current.filter(isActive))
 }
 
+type CardEntry = { text: string; note: string; mark: string; tone: Tone; isHeading: boolean }
+
+const MAX_CARD_FILES = 6
+
+const heading = (text: string): CardEntry => ({ text, note: '', mark: '', tone: 'gray', isHeading: true })
+
+// The since row's hover card: the files edited, the commands run and the subagents that finished.
+function sinceDetails(since: ActivityView, list: readonly AgentView[], now: number): CardEntry[] {
+  const entries: CardEntry[] = []
+  const finished = orderAgents([...list]).filter(agent => !isActive(agent))
+
+  if (since.files.length > 0) {
+    entries.push(heading(`Edited · ${since.files.length} files`))
+    since.files.slice(0, MAX_CARD_FILES).forEach(file => entries.push({ text: file.path, note: `${file.edits} edit${file.edits === 1 ? '' : 's'}`, mark: '✎', tone: 'warning', isHeading: false }))
+
+    if (since.files.length > MAX_CARD_FILES) {
+      entries.push({ text: `and ${since.files.length - MAX_CARD_FILES} more`, note: '', mark: '', tone: 'gray', isHeading: false })
+    }
+  }
+
+  if (since.commands.length > 0) {
+    entries.push(heading('Ran'))
+    since.commands.forEach(command =>
+      entries.push({ text: command.text, note: `${(command.ms / 1000).toFixed(1)} s`, mark: command.isOk ? '✓' : '✕', tone: command.isOk ? 'success' : 'error', isHeading: false }),
+    )
+  }
+
+  if (finished.length > 0) {
+    entries.push(heading('Subagents'))
+    finished.forEach(agent =>
+      entries.push({ text: agent.name, note: `${agentTime(agent, now)} · ${agent.tools} tools`, mark: stateOf(agent.status).glyph, tone: stateOf(agent.status).tone, isHeading: false }),
+    )
+  }
+
+  return entries
+}
+
+async function setTurn($: EngineInterface, phase: TurnPhase, detail: string): Promise<void> {
+  const now = await $.clock.now()
+  await update($, turn, () => ({ phase, detail, at: now }))
+}
+
+// A goal pinned with /purpose is kept in the store, so it outlives the process.
+async function pinGoal($: EngineInterface, text: string): Promise<void> {
+  await update($, goal, () => text)
+  const id = await $.session.id().catch(() => null)
+
+  if (id !== null) {
+    await $.store.set(`pinned:${id}`, text).catch(() => undefined)
+  }
+}
+
+// The pinned goal, else the session's first prompt from its transcript, which also holds for a mod loaded mid-session.
+async function loadGoal($: EngineInterface): Promise<void> {
+  const pinned = await $.store.get(`pinned:${await $.session.id()}`).catch(() => undefined)
+  const found = typeof pinned === 'string' ? pinned : firstPrompt(await $.session.messages())
+
+  if (found !== null) {
+    await update($, goal, () => found)
+  }
+}
+
+// A prompt of the person's own starts what "since your prompt" counts, and gives a session with no goal its goal.
+async function notePrompt($: EngineInterface, text: string): Promise<void> {
+  const now = await $.clock.now()
+  await update($, activity, () => ({ ...NO_ACTIVITY, since: now }))
+  const stated = goalOf(text)
+
+  if (stated !== null && (await read($, goal)) === null) {
+    await update($, goal, () => stated)
+  }
+}
+
+const HUE_TOUCH_MS = 10 * 60_000
+let huedKey = ''
+let huedAt = 0
+
+// Colours are handed out across sessions through the store; a session marks its worktree's as in use now and then,
+// so a session opened later picks another.
+async function claimHue($: EngineInterface, git: GitStatus): Promise<void> {
+  const key = hueKey(git)
+  const now = await $.clock.now()
+
+  if (key === huedKey && now - huedAt < HUE_TOUCH_MS) {
+    return
+  }
+
+  huedKey = key
+  huedAt = now
+  const stored = await $.store.get('hues')
+  const table = stored !== null && typeof stored === 'object' ? (stored as HueTable) : {}
+  const picked = pickHue(table, key, WORKTREE_HUES)
+  await $.store.set('hues', withHue(table, key, picked, now))
+  await update($, hue, () => picked)
+}
+
+async function noteToolStart($: EngineInterface, tool: string, args: ToolArgs): Promise<void> {
+  const question = waitsFor(tool, args)
+
+  if (question !== null) {
+    await setTurn($, 'waiting', question)
+  } else if (tool === 'mcp__ccd_turn__wrap_up') {
+    pendingAsk = typeof args.ask === 'string' && args.ask !== '' ? args.ask : null
+    await update($, plan, steps => steps.map(step => ({ ...step, status: 'completed' as const })))
+  } else if (tool === 'mcp__ccd_turn__update_plan') {
+    await update($, plan, steps => applyPlanUpdate(steps, args))
+  } else if (tool === 'TodoWrite') {
+    await update($, plan, () => todosOf(args))
+  } else {
+    const detail = describeTool(tool, args)
+
+    if (detail !== null) {
+      await setTurn($, 'working', detail)
+    }
+  }
+}
+
+// Subagents' edits and commands count too: they are part of what happened since the prompt.
+async function noteToolEnd($: EngineInterface, tool: string, args: ToolArgs, result: ToolCallResult, startedAt: number, isMain: boolean): Promise<void> {
+  const now = await $.clock.now()
+  const isOk = !('deny' in result && result.deny !== undefined) && (result as { isError?: boolean }).isError !== true
+  const path = editedPath(tool, args)
+
+  if (isMain && isTurnRunning && describeTool(tool, args) !== null) {
+    await setTurn($, 'working', 'Thinking')
+  }
+
+  if ((await read($, activity)).since === null) {
+    return
+  }
+
+  if (path !== null && isOk) {
+    await update($, activity, current => withEdit(current, shortPath(path)))
+  } else if (tool === 'Bash' || tool === 'PowerShell') {
+    await update($, activity, current => withCommand(current, commandOf(args), isOk, now - startedAt, now))
+  }
+}
+
+function endedPhase(isAborted: boolean, reason: string): [TurnPhase, string] {
+  if (isAborted || reason === 'aborted') {
+    return ['stopped', '']
+  }
+
+  if (reason !== 'answer') {
+    return ['failed', '']
+  }
+
+  return pendingAsk === null ? ['done', ''] : ['waiting', pendingAsk]
+}
+
+let redrawAt = Infinity
+let redrawTimer: Timer | null = null
+
+// "12 m ago" changes with no event to say so: one redraw, when the soonest of the shown times next changes.
+function redrawWhenTimesChange($: EngineInterface, now: number, times: number[]): void {
+  const due = Math.min(...times.map(at => now + agoChangesIn(now - at)))
+
+  if (!Number.isFinite(due) || due >= redrawAt) {
+    return
+  }
+
+  redrawTimer?.cancel()
+  redrawAt = due
+  redrawTimer = $.clock.after(due - now, () => {
+    redrawTimer = null
+    redrawAt = Infinity
+    $.ui.invalidate('ui.render')
+  })
+}
+
 // Band mods share the band: each puts its own in a Box keyed `band:<name>`, inside one column keyed `bands` that
 // the next mod unpacks, so no band hides another. A survey or a mod that draws no column is one more item.
 const BANDS = 'bands'
@@ -310,6 +552,10 @@ export const register: Register = on => {
   // A reload keeps the values in $.state but not the band's drawing, which otherwise waits for the next prompt.
   on('session.start', async ($, e, next) => {
     const result = await next(e)
+    await loadGoal($).catch(() => undefined)
+    void $.command
+      .register({ name: 'purpose', description: 'Pin what this session is for at the top of git-band', argumentHint: '<what this session is for>' })
+      .catch(() => undefined)
     isAwaitingPerson = true
     $.ui.invalidate('ui.render')
     void refresh($)
@@ -367,8 +613,26 @@ export const register: Register = on => {
     const result = await next(e)
     void dropFinished($)
 
+    if (e.command === undefined && e.isMeta !== true) {
+      void notePrompt($, e.text).catch(() => undefined)
+    }
+
     return result
   }).catch(($, e, next) => next(e))
+
+  on('command.run', { command: 'purpose' }, async ($, e) => {
+    const stated = goalOf(e.args)
+
+    if (stated === null) {
+      const current = await read($, goal)
+
+      return { text: current === null ? 'Nothing pinned: /purpose <what this session is for> pins it.' : `Pinned: ${current}` }
+    }
+
+    await pinGoal($, stated)
+
+    return { text: `Pinned: ${stated}` }
+  })
 
   on('agent.spawn', async ($, e, next) => {
     const result = await next(e)
@@ -382,7 +646,16 @@ export const register: Register = on => {
 
   // A subagent's hooks read its own directory, which may be another worktree than the session's.
   on('tool.call', async ($, e, next) => {
+    const args = e as unknown as ToolArgs
+    const isMain = e.agentId === undefined
+    const startedAt = await $.clock.now()
+
+    if (isMain && isTurnRunning) {
+      await noteToolStart($, e.tool, args).catch(() => undefined)
+    }
+
     const result = await next(e)
+    void noteToolEnd($, e.tool, args, result, startedAt, isMain).catch(() => undefined)
 
     if (e.agentId !== undefined) {
       void countTool($, e.agentId)
@@ -396,6 +669,8 @@ export const register: Register = on => {
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
       isTurnRunning = true
+      pendingAsk = null
+      await setTurn($, 'working', 'Thinking').catch(() => undefined)
     }
 
     return next(e)
@@ -405,6 +680,9 @@ export const register: Register = on => {
     const result = await next(e)
 
     if (e.agentId === undefined) {
+      const [phase, detail] = endedPhase(e.isAborted, e.reason)
+      pendingAsk = null
+      await setTurn($, phase, detail).catch(() => undefined)
       isTurnRunning = false
       isAwaitingPerson = true
       scheduleRefresh($)
@@ -438,6 +716,12 @@ export const register: Register = on => {
     }
 
     const board: Dashboard = { git: gitStatus, usage: await read($, usage), agents: await read($, agents), now: await $.clock.now() }
+    const [turnNow, goalNow, planNow, activityNow, claimed] = await Promise.all([read($, turn), read($, goal), read($, plan), read($, activity), read($, hue)])
+    board.hue = WORKTREE_HUES.find(tone => tone === claimed) ?? sessionHue(board.git)
+    const statusRow = turnNow.phase !== 'idle' || goalNow !== null || planNow.length > 0 ? statusOf(turnNow, goalNow, planNow, board.now) : null
+    const since = activityNow.since === null ? null : sinceOf(activityNow, board.agents, board.now)
+    const shownTimes = [...(['idle', 'working'].includes(turnNow.phase) ? [] : [turnNow.at]), ...(activityNow.since === null ? [] : [activityNow.since])]
+    redrawWhenTimesChange($, board.now, shownTimes)
     const { Box, Text } = $.ui.resolve(e)
     let band
 
@@ -449,10 +733,29 @@ export const register: Register = on => {
         </Text>
       )
 
+      const chip = (item: Item, tone: Tone) => (
+        <Text color={THEME_KEYS[tone]} inverse bold wrap="truncate-end">
+          {` ${[item.icon && GLYPHS[item.icon.name], item.tokens[0]?.text].filter(Boolean).join(' ')} `}
+        </Text>
+      )
+
+      const line = (items: Item[]) => (
+        <Box flexDirection="row" columnGap="sm" overflow="hidden">
+          {items.map(item => (
+            <Box flexDirection="row" columnGap="sm" flexShrink={1}>
+              {item.chip !== undefined ? chip(item, item.chip) : item.icon && GLYPHS[item.icon.name] && word(GLYPHS[item.icon.name] ?? '', item.icon.tone)}
+              {item.tokens.slice(item.chip === undefined ? 0 : 1).map(token => word(token.text, token.tone))}
+            </Box>
+          ))}
+        </Box>
+      )
+
       band = (
         <Box flexDirection="column">
+          {statusRow && line(statusRow.items)}
+          {since && line(since)}
           <Box flexDirection="row" columnGap="md" overflow="hidden">
-            {groupsOf(board.git).map(group => (
+            {groupsOf(board.git, undefined, board.hue).map(group => (
               <Box key={group.key} flexDirection="row" columnGap="sm" flexShrink={group.key === 'changes' ? 0 : 1}>
                 {group.icon && GLYPHS[group.icon.name] && word(GLYPHS[group.icon.name] ?? '', group.icon.tone)}
                 {group.tokens.map(token => word(token.text, token.tone))}
@@ -484,9 +787,14 @@ export const register: Register = on => {
       const { Svg } = $.ui.resolve(e)
       // The desktop alone draws a Client; elsewhere the context row goes without the control.
       const Client = e.surface === 'desktop' ? $.ui.resolve(e).Client : undefined
-      const guess = e.props.bodyColumns * PX_PER_COLUMN
+      const tint = board.hue
+      const guess = e.props.bodyColumns * PX_PER_COLUMN - STRIPE_WIDTH
+      const statusAlt = statusRow ? describeStatus(statusRow) : ''
+      const statusImage = statusRow ? cachedImage('status', `${Math.floor(guess)} ${statusAlt}`, () => drawStatus(statusRow, guess)) : null
+      const sinceAlt = since ? describeItems(since) : ''
+      const sinceImage = since ? cachedImage('since', sinceAlt, () => drawSince(since)) : null
       const topAlt = describeTop(board)
-      const top = cachedImage('top', topAlt, () => drawTop(board, guess))
+      const top = cachedImage('top', `${tint} ${topAlt}`, () => drawTop(board, guess))
       const usageNow = board.usage
       const contextAlt = usageNow ? describeContext(usageNow) : ''
       const context = usageNow ? cachedImage('context', contextAlt, () => drawContext(usageNow, guess - COMPACT_COLUMNS * PX_PER_COLUMN)) : null
@@ -494,10 +802,37 @@ export const register: Register = on => {
       const cards = board.agents.length > 0 ? cachedImage('agents', `${Math.floor(guess)} ${agentsAlt}`, () => drawAgents(board.agents, guess, board.now)) : null
       const details = detailsOf(board.git)
       const detailsWidth = Math.max(...details.map(line => line.reduce((sum, token) => sum + token.text.length + 3, 0)))
+      const sinceCard = sinceDetails(activityNow, board.agents, board.now)
+      const sinceWidth = Math.max(...sinceCard.map(entry => entry.text.length + entry.note.length + 4))
+      const rowsHeight = [statusImage, sinceImage, top, context, cards].reduce((sum, image) => sum + (image?.height ?? 0), 0)
+      const stripe = drawStripe(tint, rowsHeight)
 
       // An Svg given no width fills the column Box it is in, so each image is laid out at the band's real width.
-      band = (
-        <Box flexDirection="column" width="100%">
+      const rows = (
+        <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
+          {statusImage && <Svg source={statusImage.source} alt={statusAlt} height={statusImage.height} />}
+          {sinceImage && (
+            <Box key="since" flexDirection="column" width="100%">
+              <Svg source={sinceImage.source} alt={sinceAlt} height={sinceImage.height} />
+              {sinceCard.length > 0 && (
+                <Box position="absolute" top={0} left={0} width={Math.min(e.props.bodyColumns, sinceWidth)} display="none" hover={{ display: 'flex' }} flexDirection="column">
+                  {sinceCard.map(entry =>
+                    entry.isHeading ? (
+                      <Text dimColor bold>
+                        {entry.text}
+                      </Text>
+                    ) : (
+                      <Text wrap="truncate-end">
+                        <Text color={THEME_KEYS[entry.tone]}>{entry.mark ? `${entry.mark} ` : ''}</Text>
+                        <Text>{entry.text}</Text>
+                        <Text dimColor>{entry.note ? `  ${entry.note}` : ''}</Text>
+                      </Text>
+                    ),
+                  )}
+                </Box>
+              )}
+            </Box>
+          )}
           <Box key="git" flexDirection="column" width="100%">
             <Svg source={top.source} alt={topAlt} height={top.height} />
             <Box position="absolute" top={0} left={0} width={Math.min(e.props.bodyColumns, detailsWidth)} display="none" hover={{ display: 'flex' }} flexDirection="column">
@@ -522,6 +857,13 @@ export const register: Register = on => {
             </Box>
           )}
           {cards && <Svg source={cards.source} alt={agentsAlt} height={cards.height} />}
+        </Box>
+      )
+
+      band = (
+        <Box flexDirection="row" width="100%">
+          <Svg source={stripe.source} alt={`worktree colour ${tint}`} width={stripe.width} height={stripe.height} />
+          {rows}
         </Box>
       )
     }

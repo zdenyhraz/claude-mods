@@ -2,7 +2,8 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { describe, drawAgents, drawContext, drawTop, groupsOf, shorten, sliceTones } from '../hooks/look'
+import { ago, describe, drawAgents, drawContext, drawStatus, drawTop, groupsOf, sessionHue, shorten, sliceTones, statusOf } from '../hooks/look'
+import { applyPlanUpdate, describeTool, firstPrompt, isTestCommand, pickHue, withHue } from '../hooks/session'
 
 type TestEngine = Parameters<TestBody>[0]
 
@@ -101,7 +102,7 @@ async function shown(ui: Drawing): Promise<string> {
     } else if (node !== null && typeof node === 'object') {
       const element = node as { type?: unknown; props?: Record<string, unknown>; children?: unknown }
 
-      if (element.type === 'Svg' && typeof element.props?.alt === 'string') {
+      if (element.type === 'Svg' && typeof element.props?.alt === 'string' && !element.props.alt.startsWith('worktree colour')) {
         alts.push(element.props.alt)
       }
 
@@ -661,4 +662,236 @@ test('at every band width one shape of the git row shows, and it never reaches t
   expect(layoutAt(source, 380).limits).toEqual(['lr'])
   expect(source).toContain('>23%</text>')
   expect(source).toContain('>5h</text>')
+})
+
+function fakeTools(on: On, failing: RegExp = /^$/) {
+  on('tool.call', (_, e) => {
+    const command = String((e as { command?: unknown }).command ?? '')
+
+    return (failing.test(command) ? { result: {}, text: 'failed', isError: true } : { result: {} }) as never
+  })
+  on('prompt.submit', (_, e) => ({ text: e.text }) as never)
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '', reason: 'answer' }) as never)
+}
+
+const ended = (turnId: string, reason = 'answer') => ({ turnId, answer: 'done', durationMs: 1000, isAborted: reason === 'aborted', reason }) as never
+
+test('the first prompt becomes the goal, and the state follows the turn: working, waiting on a question, done', async ($, on) => {
+  fakeGit(on, MAIN_LAYOUT, CLEAN)
+  fakeTools(on)
+  const clock = await start($, on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  await $.prompt.submit({ text: 'Make the band fill its width\nand keep the text size' } as never)
+  await $.turn.start({ text: 'work', turnId: 't1' })
+  await clock.settle()
+  expect(await shown(ui)).toContain('Thinking · Make the band fill its width')
+
+  await $.tool.call({ tool: 'mcp__ccd_turn__wrap_up', recap: 'Done.', ask: 'Which fix first?' } as never)
+  await $.turn.complete(ended('t1'))
+  await clock.settle()
+  expect(await shown(ui)).toContain('Waiting for you Which fix first? just now · Make the band fill its width')
+
+  await $.turn.start({ text: 'go', turnId: 't2' })
+  await $.turn.complete(ended('t2'))
+  await clock.settle()
+  expect(await shown(ui)).toContain('Done just now')
+
+  await clock.advance(5 * 60_000)
+  expect(await shown(ui)).toContain('Done 5 m ago')
+  await ui.unmount()
+})
+
+test('/purpose pins the goal, and a stopped turn says so', async ($, on) => {
+  const saved = new Map<string, unknown>()
+  fakeGit(on, MAIN_LAYOUT, CLEAN)
+  fakeTools(on)
+  on('session.id', () => ({ value: 'session-1' }) as never)
+  on('store.set', (_, e) => {
+    saved.set((e as { key: string }).key, (e as { value: unknown }).value)
+
+    return { value: undefined } as never
+  })
+  const clock = await start($, on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  const set = await $.command.run({ command: 'purpose', args: 'Speed up the scheduler' } as never)
+  expect((set as { text?: string }).text).toBe('Pinned: Speed up the scheduler')
+  await $.prompt.submit({ text: 'look at the profile first' } as never)
+  await $.turn.start({ text: 'work', turnId: 't1' })
+  await $.turn.complete(ended('t1', 'aborted'))
+  await clock.settle()
+
+  expect(await shown(ui)).toContain('Stopped just now · Speed up the scheduler')
+  expect(saved.get('pinned:session-1')).toBe('Speed up the scheduler')
+  await ui.unmount()
+})
+
+test('the plan step follows the task list: a new list, an advance, and the wrap-up', () => {
+  const items = [
+    { content: 'Read the code', status: 'in_progress' as const },
+    { content: 'Write the fix', status: 'pending' as const },
+    { content: 'Run the tests', status: 'pending' as const },
+  ]
+  const advanced = applyPlanUpdate(applyPlanUpdate([], { items }), { advance: true })
+  const row = statusOf({ phase: 'working', detail: 'Editing look.ts', at: 0 }, 'Fix the nav', advanced, 0)
+
+  expect(row.step).toEqual({ position: 2, total: 3, text: 'Write the fix', states: ['completed', 'in_progress', 'pending'], isComplete: false })
+  expect(applyPlanUpdate(advanced, { done: [2], start: 3 }).map(step => step.status)).toEqual(['completed', 'completed', 'in_progress'])
+
+  const image = drawStatus(row, 760)
+  expect(image.source).toContain('>Write the fix</text>')
+  expect(image.source).toContain('>2/3</text>')
+  expect(image.source).toContain('@media (max-width:519.99px)')
+})
+
+test('tool calls read as what the session is doing, and test commands are recognised', () => {
+  expect(describeTool('Bash', { command: 'python run_test.py --build_type Release' })).toBe('Running tests')
+  expect(describeTool('Bash', { command: 'npm test' })).toBe('Running tests')
+  expect(describeTool('Bash', { command: 'git commit -F msg.txt' })).toBe('Committing')
+  expect(describeTool('Edit', { file_path: 'C:/code/my-app/src/nav.ts' })).toBe('Editing nav.ts')
+  expect(describeTool('mcp__ccd_turn__update_plan', {})).toBeNull()
+  expect(isTestCommand('ls tests')).toBe(false)
+  expect(isTestCommand('build/Release/my-app-test --gtest_filter=Nav.*')).toBe(true)
+  expect(ago(0)).toBe('just now')
+  expect(ago(14 * 60_000)).toBe('14 m ago')
+  expect(ago(3 * 3_600_000)).toBe('3 h ago')
+})
+
+test('since your prompt counts the files, tests and commits, and its hover card lists them', async ($, on) => {
+  fakeGit(on, MAIN_LAYOUT, CLEAN)
+  fakeTools(on, /fail/)
+  const clock = await start($, on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  await $.prompt.submit({ text: 'Fix the nav' } as never)
+  await clock.settle()
+  expect(await shown(ui)).toContain('Since your prompt just now · nothing changed')
+
+  await $.tool.call({ tool: 'Edit', file_path: 'C:/code/my-app/src/nav.ts', old_string: 'a', new_string: 'b' } as never)
+  await $.tool.call({ tool: 'Edit', file_path: 'C:/code/my-app/src/nav.ts', old_string: 'b', new_string: 'c' } as never)
+  await $.tool.call({ tool: 'Write', file_path: 'C:/code/my-app/src/menu.ts', content: 'x' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'npm test' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'git commit -m "Fix the nav"' } as never)
+  await clock.settle()
+  expect(await shown(ui)).toContain('Since your prompt just now · 2 files · tests ✓ · 1 commit')
+
+  const has = async (text: string) => (await ui.find({ type: 'Text', text })) !== undefined
+  expect(await has('src/nav.ts')).toBe(true)
+  expect(await has('  2 edits')).toBe(true)
+  expect(await has('npm test')).toBe(true)
+
+  await $.tool.call({ tool: 'Bash', command: 'npm test -- fail' } as never)
+  await clock.settle()
+  expect(await shown(ui)).toContain('tests ✗')
+
+  await clock.advance(14 * 60_000)
+  expect(await shown(ui)).toContain('Since your prompt 14 m ago')
+  await ui.unmount()
+})
+
+test('each worktree has a colour of its own, the same every time, drawn as a stripe down the band', async ($, on) => {
+  const named = (worktree: string) => ({ ...SMALL_REPO, worktree })
+  const hues = ['fix-nav', 'search-index', 'export-csv', 'perf-tuning', 'dark-theme'].map(name => sessionHue(named(name)))
+
+  expect(sessionHue(named('fix-nav'))).toBe(hues[0])
+  expect(new Set(hues).size).toBeGreaterThan(2)
+  expect(groupsOf(named('fix-nav')).find(group => group.key === 'worktree')?.icon?.tone).toBe(hues[0])
+
+  fakeGit(on, WORKTREE_LAYOUT, CLEAN)
+  await start($, on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const stripe = findElement(await ui.drawn(), element => element.type === 'Svg' && String(element.props?.alt).startsWith('worktree colour'))
+
+  expect(stripe?.props?.alt).toBe(`worktree colour ${sessionHue(named('feature-x'))}`)
+  expect(stripe?.props?.width).toBe(11)
+  expect(stripe?.props?.height).toBe(22)
+  await ui.unmount()
+})
+
+test('the state leads the status row as a solid chip in its colour', async ($, on) => {
+  fakeGit(on, MAIN_LAYOUT, CLEAN)
+  fakeTools(on)
+  const clock = await start($, on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const chip = async (words: string) => {
+    const row = findElement(await ui.drawn(), element => element.type === 'Svg' && String(element.props?.alt).startsWith(words))
+    const source = String(row?.props?.source)
+
+    return source.includes(`>${words}</text>`) && /class="strong f-ink"/.test(source) ? source.match(/<rect class="f-(\w+)"[^>]*rx="9"\/>/)?.[1] : undefined
+  }
+
+  await $.prompt.submit({ text: 'Fix the nav' } as never)
+  await clock.settle()
+  expect(await chip('Ready')).toBe('gray')
+
+  await $.turn.start({ text: 'work', turnId: 't1' })
+  await clock.settle()
+  expect(await chip('Thinking')).toBe('sky')
+
+  await $.tool.call({ tool: 'mcp__ccd_turn__wrap_up', recap: 'Done.', ask: 'Which index?' } as never)
+  await $.turn.complete(ended('t1'))
+  await clock.settle()
+  expect(await chip('Waiting for you')).toBe('warning')
+
+  await $.turn.start({ text: 'go', turnId: 't2' })
+  await $.turn.complete(ended('t2'))
+  await clock.settle()
+  expect(await chip('Done')).toBe('success')
+  await ui.unmount()
+})
+
+test('the chip keeps its words whole when the row is cut to fit', () => {
+  const row = statusOf({ phase: 'waiting', detail: 'Which of the two search indexes should the band use?', at: 0 }, 'Make the band fill its width at every size', [], 0)
+  const image = drawStatus(row, 300)
+
+  expect(image.source).toContain('>Waiting for you</text>')
+  expect(image.source).not.toContain('>Which of the two search indexes should the band use?</text>')
+  expect(image.source).toContain('>Which of')
+  expect(image.source).not.toContain('>Make the')
+})
+
+test('a session loaded mid-way takes its goal from the first prompt in its transcript', async ($, on) => {
+  fakeGit(on, MAIN_LAYOUT, CLEAN)
+  on('session.id', () => ({ value: 'session-2' }) as never)
+  on('session.messages', () =>
+    ({
+      value: [
+        { role: 'user', text: 'This session is being continued from a previous conversation.', toolUses: [] },
+        { role: 'user', text: '<system-reminder>notes</system-reminder>\nFix the nav bar on narrow windows\nand test it', toolUses: [] },
+        { role: 'assistant', text: 'On it.', toolUses: [] },
+      ],
+    }) as never,
+  )
+  await start($, on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  expect(await shown(ui)).toContain('Ready · Fix the nav bar on narrow windows')
+  expect(firstPrompt([{ role: 'user', text: '/compact' }, { role: 'user', text: '[Image #1] what is this' }])).toBeNull()
+  await ui.unmount()
+})
+
+test('worktree colours go round: a new worktree gets the one unused longest, a known one keeps its own', () => {
+  const hues = ['violet', 'teal', 'pink'] as const
+  let table = {}
+
+  table = withHue(table, 'my-app/fix-nav', pickHue(table, 'my-app/fix-nav', hues), 1)
+  table = withHue(table, 'my-app/search', pickHue(table, 'my-app/search', hues), 2)
+  table = withHue(table, 'my-app/export', pickHue(table, 'my-app/export', hues), 3)
+
+  expect(new Set(Object.values(table).map(entry => (entry as { hue: string }).hue)).size).toBe(3)
+  expect(pickHue(table, 'my-app/search', hues)).toBe('teal')
+  expect(pickHue(table, 'my-app/new-one', hues)).toBe('violet')
+})
+
+test('a finished plan shows its full bar and no step words', () => {
+  const done = [
+    { content: 'Write the fix', status: 'completed' as const },
+    { content: 'Update the README', status: 'completed' as const },
+  ]
+  const image = drawStatus(statusOf({ phase: 'done', detail: '', at: 0 }, 'Fix the nav', done, 0), 760)
+
+  expect(image.source).toContain('>2/2</text>')
+  expect(image.source).not.toContain('Update the README')
 })

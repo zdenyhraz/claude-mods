@@ -6,7 +6,7 @@ Mods need Claude Code 2.1.287 or later.
 
 | Mod | What it does |
 | --- | --- |
-| [git-band](plugins/git-band) | A session dashboard above the prompt: git branch, worktree and changes, context usage, plan limits and subagents. |
+| [git-band](plugins/git-band) | A session dashboard above the prompt: what the session is doing and for, what changed since your prompt, git branch, worktree and changes, context usage, plan limits and subagents. |
 
 ## git-band
 

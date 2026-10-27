@@ -1,4 +1,4 @@
-import type { AgentView, ContextSlice, GitStatus, UsageView } from '../types'
+import type { ActivityView, AgentView, ContextSlice, GitStatus, PlanStep, TurnPhase, TurnView, UsageView } from '../types'
 
 export type Tone =
   | 'text'
@@ -13,10 +13,28 @@ export type Tone =
   | 'teal'
   | 'sky'
   | 'pink'
+  | 'tan'
+  | 'coral'
   | 'gray'
   | 'free'
   | 'line'
-export type Icon = 'repo' | 'worktree' | 'branch' | 'context' | 'running' | 'waiting' | 'done' | 'failed' | 'queued'
+  | 'ink'
+export type Icon =
+  | 'repo'
+  | 'worktree'
+  | 'branch'
+  | 'context'
+  | 'running'
+  | 'waiting'
+  | 'done'
+  | 'failed'
+  | 'queued'
+  | 'goal'
+  | 'history'
+  | 'file'
+  | 'flask'
+  | 'commit'
+  | 'bot'
 export type Token = { text: string; tone: Tone }
 export type Group = { key: string; border: Tone; icon?: { name: Icon; tone: Tone }; tokens: Token[] }
 
@@ -35,9 +53,12 @@ const DARK: Record<Tone, string> = {
   teal: '#4fb3a9',
   sky: '#6cb4ee',
   pink: '#f472b6',
+  tan: '#c9a27a',
+  coral: '#f2916b',
   gray: '#8a8882',
   free: '#3d3c38',
   line: '#4a4945',
+  ink: '#1f1e1d',
 }
 
 const LIGHT: Record<Tone, string> = {
@@ -53,9 +74,12 @@ const LIGHT: Record<Tone, string> = {
   teal: '#00706a',
   sky: '#1a66c9',
   pink: '#be185d',
+  tan: '#8a6338',
+  coral: '#b4502a',
   gray: '#8a8882',
   free: '#e8e6de',
   line: '#d9d7cf',
+  ink: '#ffffff',
 }
 
 const ICON_PATHS: Record<Icon, string> = {
@@ -69,6 +93,12 @@ const ICON_PATHS: Record<Icon, string> = {
   done: '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
   failed: '<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>',
   queued: '<circle cx="12" cy="12" r="10" stroke-dasharray="3.5 3"/>',
+  goal: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+  history: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
+  file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+  flask: '<path d="M10 2v7.31"/><path d="M14 9.3V1.99"/><path d="M8.5 2h7"/><path d="M14 9.3a6.5 6.5 0 1 1-4 0"/><path d="M5.52 16h12.96"/>',
+  commit: '<circle cx="12" cy="12" r="3"/><path d="M3 12h6"/><path d="M15 12h6"/>',
+  bot: '<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>',
 }
 
 const CHANGES: { key: keyof GitStatus; symbol: string; word: string; tone: Tone }[] = [
@@ -118,14 +148,31 @@ export const GIT_FITS: GitFit[] = [
   NARROWEST,
 ]
 
-export function groupsOf(git: GitStatus, fit: GitFit = FULL): Group[] {
+// None of them is a colour the outline uses for a state.
+export const WORKTREE_HUES: Tone[] = ['violet', 'teal', 'pink', 'blue', 'tan', 'coral']
+
+// The worktree the colour belongs to; the main checkout goes by its branch.
+export const hueKey = (git: GitStatus): string => `${git.repo}/${git.worktree ?? git.branch}`
+
+// A colour from the worktree's name, for when the colours handed out across sessions can't be read.
+export function sessionHue(git: GitStatus): Tone {
+  let hash = 0
+
+  for (const char of git.worktree ?? git.branch) {
+    hash = (hash * 31 + (char.codePointAt(0) ?? 0)) >>> 0
+  }
+
+  return WORKTREE_HUES[hash % WORKTREE_HUES.length] ?? 'violet'
+}
+
+export function groupsOf(git: GitStatus, fit: GitFit = FULL, hue: Tone = sessionHue(git)): Group[] {
   const groups: Group[] = [
     { key: 'repo', border: 'sky', icon: { name: 'repo', tone: 'sky' }, tokens: [{ text: shorten(git.repo, fit.repo), tone: 'sky' }] },
   ]
 
   if (git.worktree !== null) {
-    const tokens = fit.hasWorktreeName ? [{ text: shorten(git.worktree, fit.worktree), tone: 'violet' as const }] : []
-    groups.push({ key: 'worktree', border: 'violet', icon: { name: 'worktree', tone: 'violet' }, tokens })
+    const tokens = fit.hasWorktreeName ? [{ text: shorten(git.worktree, fit.worktree), tone: hue }] : []
+    groups.push({ key: 'worktree', border: hue, icon: { name: 'worktree', tone: hue }, tokens })
   }
 
   const branch: Token[] = [{ text: shorten(git.branch, fit.branch), tone: 'claude' }]
@@ -279,9 +326,125 @@ export function orderAgents(agents: AgentView[]): AgentView[] {
   return [...agents].sort((a, b) => Number(isActive(b)) - Number(isActive(a)) || a.startedAt - b.startedAt)
 }
 
-export type Dashboard = { git: GitStatus; usage: UsageView | null; agents: AgentView[]; now: number }
+export type Dashboard = { git: GitStatus; usage: UsageView | null; agents: AgentView[]; now: number; hue?: Tone }
 
 export const agentTime = (agent: AgentView, now: number): string => elapsed((agent.endedAt ?? now) - agent.startedAt)
+
+export function ago(ms: number): string {
+  const minutes = Math.floor(ms / 60_000)
+
+  if (minutes < 1) {
+    return 'just now'
+  }
+
+  if (minutes < 60) {
+    return `${minutes} m ago`
+  }
+
+  const hours = Math.floor(minutes / 60)
+
+  return hours < 24 ? `${hours} h ago` : `${Math.floor(hours / 24)} d ago`
+}
+
+// How long until what ago() says for this age next changes.
+export function agoChangesIn(ms: number): number {
+  const age = Math.max(0, ms)
+
+  if (age < 3_600_000) {
+    return 60_000 - (age % 60_000)
+  }
+
+  return age < 86_400_000 ? 3_600_000 - (age % 3_600_000) : 86_400_000 - (age % 86_400_000)
+}
+
+// One thing a row says: an optional icon, then words. A chip item sets its icon and first word on a solid pill of
+// the chip's tone.
+export type Item = { icon?: { name: Icon; tone: Tone }; tokens: Token[]; chip?: Tone }
+
+export type Step = { position: number; total: number; text: string; states: PlanStep['status'][]; isComplete: boolean }
+
+export type StatusRow = { items: Item[]; step: Step | null; tone: Tone }
+
+const PHASES: Record<TurnPhase, { icon: Icon; tone: Tone; word: string }> = {
+  idle: { icon: 'queued', tone: 'gray', word: 'Ready' },
+  working: { icon: 'running', tone: 'sky', word: 'Working' },
+  waiting: { icon: 'waiting', tone: 'warning', word: 'Waiting for you' },
+  done: { icon: 'done', tone: 'success', word: 'Done' },
+  stopped: { icon: 'failed', tone: 'inactive', word: 'Stopped' },
+  failed: { icon: 'failed', tone: 'error', word: 'Failed' },
+}
+
+// The step in progress, else the next one, else the last; numbered by its place, or by how many are done when none runs.
+export function stepOf(plan: readonly PlanStep[]): Step | null {
+  const current = plan.findIndex(step => step.status === 'in_progress')
+  const next = plan.findIndex(step => step.status === 'pending')
+  const index = current >= 0 ? current : next >= 0 ? next : plan.length - 1
+  const shown = plan[index]
+
+  if (shown === undefined) {
+    return null
+  }
+
+  return {
+    position: current >= 0 ? current + 1 : plan.filter(step => step.status === 'completed').length,
+    total: plan.length,
+    text: shown.content,
+    states: plan.map(step => step.status),
+    isComplete: plan.every(step => step.status === 'completed'),
+  }
+}
+
+export function statusOf(turn: TurnView, goal: string | null, plan: readonly PlanStep[], now: number): StatusRow {
+  const phase = PHASES[turn.phase]
+  const state: Token[] = [{ text: turn.phase === 'working' ? turn.detail || phase.word : phase.word, tone: 'ink' }]
+
+  if (turn.phase === 'waiting' && turn.detail !== '') {
+    state.push({ text: turn.detail, tone: phase.tone })
+  }
+
+  if (turn.phase !== 'working' && turn.phase !== 'idle') {
+    state.push({ text: ago(now - turn.at), tone: 'gray' })
+  }
+
+  const items: Item[] = [{ icon: { name: phase.icon, tone: 'ink' }, tokens: state, chip: phase.tone }]
+
+  if (goal !== null) {
+    items.push({ icon: { name: 'goal', tone: 'gray' }, tokens: [{ text: goal, tone: 'text' }] })
+  }
+
+  return { items, step: stepOf(plan), tone: phase.tone }
+}
+
+const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? '' : 's'}`
+
+export function sinceOf(activity: ActivityView, agents: readonly AgentView[], now: number): Item[] {
+  const items: Item[] = [{ icon: { name: 'history', tone: 'gray' }, tokens: [{ text: `Since your prompt ${ago(now - (activity.since ?? now))}`, tone: 'gray' }] }]
+  const finished = agents.filter(agent => !isActive(agent)).length
+
+  if (activity.files.length > 0) {
+    items.push({ icon: { name: 'file', tone: 'warning' }, tokens: [{ text: plural(activity.files.length, 'file'), tone: 'warning' }] })
+  }
+
+  if (activity.tests !== null) {
+    const tone = activity.tests.isOk ? 'success' : 'error'
+    items.push({ icon: { name: 'flask', tone }, tokens: [{ text: activity.tests.isOk ? 'tests ✓' : 'tests ✗', tone }] })
+  }
+
+  if (activity.commits > 0) {
+    items.push({ icon: { name: 'commit', tone: 'sky' }, tokens: [{ text: plural(activity.commits, 'commit'), tone: 'sky' }] })
+  }
+
+  if (finished > 0) {
+    items.push({ icon: { name: 'bot', tone: 'violet' }, tokens: [{ text: `${plural(finished, 'subagent')} done`, tone: 'violet' }] })
+  }
+
+  if (items.length === 1) {
+    const commands = activity.commands.length
+    items.push({ tokens: [{ text: commands > 0 ? plural(commands, 'command') : 'nothing changed', tone: 'inactive' }] })
+  }
+
+  return items
+}
 
 export function describe(groups: Group[]): string {
   return groups.map(group => `${group.key} ${group.tokens.map(token => token.text).join(' ')}`).join(' · ')
@@ -299,6 +462,15 @@ export function describeAgents(agents: AgentView[], now: number): string {
   return orderAgents(agents)
     .map(agent => `agent ${stateOf(agent.status).word} ${agent.name} ${agentTime(agent, now)} ${agent.tools} tools`)
     .join(' · ')
+}
+
+export const describeItems = (items: Item[]): string => items.map(item => item.tokens.map(token => token.text).join(' ')).join(' · ')
+
+export function describeStatus(row: StatusRow): string {
+  const words = row.step?.isComplete === false ? ` ${row.step.text}` : ''
+  const step = row.step ? ` · step ${row.step.position}/${row.step.total}${words}` : ''
+
+  return `${describeItems(row.items)}${step}`
 }
 
 export function describeDashboard(board: Dashboard): string {
@@ -481,11 +653,11 @@ function limitsForms(limits: UsageView['limits']): LimitsForm[] {
 
 type GitShape = { groups: Group[]; width: number }
 
-function gitShapes(git: GitStatus): GitShape[] {
+function gitShapes(git: GitStatus, hue: Tone): GitShape[] {
   const shapes: GitShape[] = []
 
   for (const fit of GIT_FITS) {
-    const groups = groupsOf(git, fit)
+    const groups = groupsOf(git, fit, hue)
     const last = shapes.at(-1)
 
     if (last === undefined || describe(last.groups) !== describe(groups)) {
@@ -514,7 +686,7 @@ function shapeRange(shapes: GitShape[], index: number, form: LimitsForm): Range 
 // clipped to the room the limits leave it.
 export function drawTop(board: Dashboard, guess: number): Image {
   const limits = board.usage?.limits ?? []
-  const shapes = gitShapes(board.git)
+  const shapes = gitShapes(board.git, board.hue ?? sessionHue(board.git))
   const forms = limitsForms(limits)
   const guessForm = forms.find(form => contains(form.range, guess)) ?? forms[forms.length - 1]
   const rules: string[] = []
@@ -684,4 +856,185 @@ export function drawAgents(agents: AgentView[], guess: number, now: number): Ima
   const bottom = drawCards(orderAgents(agents), CARDS_TOP, guess, now, parts)
 
   return wrap(parts, bottom)
+}
+
+const CHIP_PAD = 8
+const CHIP_ICON = 13
+
+function drawChip(item: Item, tone: Tone, x: number, parts: string[]): number {
+  const words = item.tokens[0]
+  const inner = (item.icon ? CHIP_ICON + 5 : 0) + (words ? textWidth(words.text, SIZES.strong) : 0)
+  parts.push(`<rect class="f-${tone}" x="${x}" y="2" width="${inner + 2 * CHIP_PAD}" height="18" rx="9"/>`)
+
+  if (item.icon) {
+    parts.push(icon(item.icon.name, x + CHIP_PAD, (ROW - CHIP_ICON) / 2, item.icon.tone, CHIP_ICON))
+  }
+
+  if (words) {
+    parts.push(text(words.text, x + CHIP_PAD + (item.icon ? CHIP_ICON + 5 : 0), 15, words.tone, 'strong'))
+  }
+
+  return x + inner + 2 * CHIP_PAD + 6
+}
+
+function drawItems(items: Item[], parts: string[]): number {
+  let x = 0
+
+  items.forEach((item, index) => {
+    if (index > 0) {
+      parts.push(text('·', x + 2, 15, 'line', 'strong'))
+      x += 14
+    }
+
+    if (item.chip !== undefined) {
+      x = drawChip(item, item.chip, x, parts)
+    } else if (item.icon) {
+      parts.push(icon(item.icon.name, x, 3, item.icon.tone))
+      x += 19
+    }
+
+    item.tokens.slice(item.chip === undefined ? 0 : 1).forEach(token => {
+      parts.push(text(token.text, x, 15, token.tone, 'strong'))
+      x += textWidth(token.text, SIZES.strong) + 5
+    })
+  })
+
+  return x
+}
+
+const MIN_CUT = 70
+
+// Cuts each item's longest words, last item first, until the row fits the room. An item after the first that would
+// be cut below MIN_CUT goes whole, leaving its room to the ones before it.
+function fitItems(items: Item[], room: number): Item[] {
+  let fitted = items
+
+  for (let index = items.length - 1; index >= 0; index--) {
+    const over = drawItems(fitted, []) - room
+    const item = fitted[index]
+
+    if (over <= 0 || item === undefined) {
+      break
+    }
+
+    // A chip's own words stay whole.
+    const from = item.chip === undefined ? 0 : 1
+    const longest = item.tokens.reduce((best, token, at) => (at > from && token.text.length > (item.tokens[best]?.text.length ?? 0) ? at : best), from)
+    const token = item.tokens[longest]
+
+    if (token === undefined) {
+      continue
+    }
+
+    const left = textWidth(token.text, SIZES.strong) - over
+
+    if (index > 0 && left < MIN_CUT) {
+      fitted = fitted.filter((_, at) => at !== index)
+      continue
+    }
+
+    const cut = { ...token, text: fit(token.text, SIZES.strong, Math.max(30, left)) }
+    const tokens = item.tokens.map((other, at) => (at === longest ? cut : other))
+    fitted = fitted.map((other, at) => (at === index ? { ...item, tokens } : other))
+  }
+
+  return fitted
+}
+
+const SEGMENT = 11
+const SEGMENT_GAP = 2
+const STEP_LABEL_BELOW = 520
+
+function stepWidth(step: Step, label: string): number {
+  const count = textWidth(`${step.position}/${step.total}`, SIZES.strong)
+
+  return step.total * (SEGMENT + SEGMENT_GAP) - SEGMENT_GAP + 6 + count + (label === '' ? 0 : 5 + textWidth(label, SIZES.name))
+}
+
+function drawStep(step: Step, label: string, tone: Tone, parts: string[]): void {
+  let x = -stepWidth(step, label)
+
+  for (const state of step.states) {
+    const fill = state === 'completed' ? 'success' : state === 'in_progress' ? tone : 'free'
+    parts.push(`<rect class="f-${fill}" x="${x}" y="8.5" width="${SEGMENT}" height="5" rx="2.5"/>`)
+    x += SEGMENT + SEGMENT_GAP
+  }
+
+  x += 6 - SEGMENT_GAP
+  const count = `${step.position}/${step.total}`
+  parts.push(text(count, x, 15, 'gray', 'strong'))
+
+  if (label !== '') {
+    parts.push(text(label, x + textWidth(count, SIZES.strong) + 5, 15, 'text', 'name'))
+  }
+}
+
+// The state and the goal on the left, the plan's step at the right edge. Below STEP_LABEL_BELOW the step keeps its
+// bar and number and drops its words; the left side is clipped to the room the step leaves.
+export function drawStatus(row: StatusRow, guess: number): Image {
+  const step = row.step
+  // A finished plan needs only its full bar.
+  const label = step && !step.isComplete ? fit(step.text, SIZES.name, Math.max(60, guess * 0.3)) : ''
+  const full = step ? stepWidth(step, label) + 14 : 0
+  const short = step ? stepWidth(step, '') + 14 : 0
+  const isShort = guess < STEP_LABEL_BELOW
+  const room = Math.max(0, guess - (isShort ? short : full))
+  const parts = [
+    `<clipPath id="status"><rect id="status-room" x="0" y="0" width="${room}" height="${ROW}"/></clipPath><g clip-path="url(#status)">`,
+  ]
+
+  drawItems(fitItems(row.items, room), parts)
+  parts.push('</g>')
+
+  if (step === null) {
+    return wrap(parts, ROW, '#status-room{width:100%}')
+  }
+
+  const right = [`<g class="sf"${isShort ? ' display="none"' : ''}>`]
+  drawStep(step, label, row.tone, right)
+  right.push(`</g><g class="ss"${isShort ? '' : ' display="none"'}>`)
+  drawStep(step, '', row.tone, right)
+  right.push('</g>')
+  parts.push(atRightEdge(right.join(''), ROW))
+
+  return wrap(
+    parts,
+    ROW,
+    `#status-room{width:max(0px, calc(100% - ${full}px))}` +
+      `@media (max-width:${STEP_LABEL_BELOW - 0.01}px){.sf{display:none}.ss{display:inline}#status-room{width:max(0px, calc(100% - ${short}px))}}`,
+  )
+}
+
+// An item that would run past the band's edge goes whole, with every item after it.
+export function drawSince(items: Item[]): Image {
+  const parts: string[] = []
+  const rules: string[] = []
+  let drawn: string[] = []
+
+  items.forEach((_, index) => {
+    const upTo: string[] = []
+    const end = drawItems(items.slice(0, index + 1), upTo)
+    parts.push(`<g class="i${index}">`, ...upTo.slice(drawn.length), '</g>')
+    drawn = upTo
+
+    if (index > 0) {
+      rules.push(`@media (max-width:${(end - 0.01).toFixed(2)}px){.i${index}{display:none}}`)
+    }
+  })
+
+  return wrap(parts, ROW, rules.join(''))
+}
+
+const STRIPE = 3
+
+// What the stripe takes of the band's width, the gap after it included.
+export const STRIPE_WIDTH = STRIPE + 8
+
+// The worktree's colour down the band's left edge, as tall as the rows.
+export function drawStripe(hue: Tone, height: number): Image & { width: number } {
+  const h = Math.ceil(height)
+  const style = `${palette(DARK)}@media (prefers-color-scheme: light){${palette(LIGHT)}}`
+  const stripe = `<rect class="f-${hue}" x="0" y="1" width="${STRIPE}" height="${Math.max(0, h - 2)}" rx="1.5"/>`
+
+  return { source: `<svg xmlns="http://www.w3.org/2000/svg" width="${STRIPE_WIDTH}" height="${h}"><style>${style}</style>${stripe}</svg>`, height: h, width: STRIPE_WIDTH }
 }
