@@ -1,0 +1,12 @@
+{
+  "name": "claude-mods",
+  "owner": { "name": "zdenyhraz" },
+  "description": "Mods for Claude Code, made for the desktop app's Code tab.",
+  "plugins": [
+    {
+      "name": "git-band",
+      "source": "./plugins/git-band",
+      "description": "A band above the prompt with the session's git branch, worktree, ahead/behind and changed-file counts."
+    }
+  ]
+}
