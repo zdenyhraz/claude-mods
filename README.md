@@ -8,6 +8,18 @@ Mods need Claude Code 2.1.287 or later.
 | --- | --- |
 | [git-band](plugins/git-band) | A session dashboard above the prompt: git branch, worktree and changes, context usage, plan limits and subagents. |
 
+## git-band
+
+While subagents run:
+
+![git-band with five subagent cards: running, running, waiting, done and failed](plugins/git-band/docs/dashboard-agents.png)
+
+With none:
+
+![git-band with no subagents: the git row with the plan limits, and the context bar](plugins/git-band/docs/dashboard-idle.png)
+
+Drawn by the mod's own code with sample data, in the desktop app's dark theme.
+
 ## Install
 
 At the prompt of a Claude Code terminal session:

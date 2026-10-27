@@ -1,12 +1,6 @@
 # git-band
 
-A session dashboard above the Claude Code prompt:
-
-| With subagents | Without subagents |
-| --- | --- |
-| ![The dashboard with five subagent cards: running, done, failed, running and waiting](docs/dashboard-agents.png) | ![The dashboard with no subagents: the git row and the context bar only](docs/dashboard-idle.png) |
-
-The images are the design mockups the dashboard was built from, in the app's dark theme.
+A session dashboard above the Claude Code prompt. Screenshots are in the [repository README](../../README.md#git-band).
 
 1. **Git**, then the plan limits on the right:
    - **Repo** (blue): a book icon and the repository's name.
