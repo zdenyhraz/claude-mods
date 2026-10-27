@@ -50,8 +50,8 @@ coloured text.
 
 Long names are cut in the middle, keeping both ends: `zdenyhraz/camera-da-…-caf29d`.
 
-Each worktree has a colour of its own: violet, teal, pink, blue, tan or coral, none of them a colour a
-state's chip uses. A worktree keeps its colour, and a new one gets the colour no other worktree has used for
+Each worktree has a colour of its own: violet, teal, pink, lime, tan or coral, none of them the repository
+name's blue or a colour a state's chip uses. A worktree keeps its colour, and a new one gets the colour no other worktree has used for
 longest, so up to six sessions open together all differ; the main checkout goes by its branch. On the
 desktop app the colour runs as a stripe down the band's left edge, so you know which session you are looking
 at before reading anything.

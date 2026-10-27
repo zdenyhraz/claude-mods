@@ -15,6 +15,7 @@ export type Tone =
   | 'pink'
   | 'tan'
   | 'coral'
+  | 'lime'
   | 'gray'
   | 'free'
   | 'line'
@@ -55,6 +56,7 @@ const DARK: Record<Tone, string> = {
   pink: '#f472b6',
   tan: '#c9a27a',
   coral: '#f2916b',
+  lime: '#a8d65c',
   gray: '#8a8882',
   free: '#3d3c38',
   line: '#4a4945',
@@ -76,6 +78,7 @@ const LIGHT: Record<Tone, string> = {
   pink: '#be185d',
   tan: '#8a6338',
   coral: '#b4502a',
+  lime: '#4d7c0f',
   gray: '#8a8882',
   free: '#e8e6de',
   line: '#d9d7cf',
@@ -148,8 +151,8 @@ export const GIT_FITS: GitFit[] = [
   NARROWEST,
 ]
 
-// None of them is a colour the outline uses for a state.
-export const WORKTREE_HUES: Tone[] = ['violet', 'teal', 'pink', 'blue', 'tan', 'coral']
+// None of them is the repo name's blue or a colour a state's chip uses.
+export const WORKTREE_HUES: Tone[] = ['violet', 'teal', 'pink', 'lime', 'tan', 'coral']
 
 // The worktree the colour belongs to; the main checkout goes by its branch.
 export const hueKey = (git: GitStatus): string => `${git.repo}/${git.worktree ?? git.branch}`

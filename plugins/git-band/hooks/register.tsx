@@ -87,6 +87,7 @@ const THEME_KEYS: Record<Tone, Color> = {
   pink: 'bashBorder',
   tan: 'warning',
   coral: 'claude',
+  lime: 'success',
   gray: 'inactive',
   free: 'subtle',
   line: 'subtle',
