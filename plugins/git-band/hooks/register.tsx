@@ -9,9 +9,11 @@ const REFRESHING_TOOLS = /^(Bash|PowerShell|Edit|Write|NotebookEdit|EnterWorktre
 
 const status = atom({ plugin: 'git-band', key: 'status' } as const, null)
 
-// Svg is drawn as an isolated image, so it cannot follow the theme: a mid grey reads on light and dark.
+// Pills are theme colours with white text; Svg is an isolated image that cannot follow the theme, so its stroke is white too.
+const PILL_TEXT = '#ffffff'
+
 const icon = (body: string): string =>
-  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#8b919a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="${PILL_TEXT}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`
 
 const ICONS = {
   branch: icon('<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>'),
@@ -19,6 +21,8 @@ const ICONS = {
 }
 
 const GLYPHS = { branch: '⎇', worktree: '▣' }
+
+type Chip = { key: string; text: string; color: Color }
 
 async function git($: EngineInterface, args: string[]): Promise<string | null> {
   const result = await $.process.run(['git', '--no-optional-locks', ...args], { timeoutMs: 15_000 }).catch(() => null)
@@ -121,7 +125,11 @@ export const register: Register = on => {
 
     const drawIcon = (name: keyof typeof ICONS) => {
       if (e.surface === 'terminal') {
-        return <Text dimColor>{GLYPHS[name]}</Text>
+        return (
+          <Text color={PILL_TEXT} bold>
+            {GLYPHS[name]}
+          </Text>
+        )
       }
 
       const { Svg } = $.ui.resolve(e)
@@ -129,72 +137,82 @@ export const register: Register = on => {
       return <Svg source={ICONS[name]} alt={name} width={14} height={14} />
     }
 
-    const counts: { value: number; label: string; color: Color }[] = [
-      { value: git.conflicted, label: 'conflicted', color: 'error' },
-      { value: git.added, label: 'added', color: 'success' },
-      { value: git.modified, label: 'modified', color: 'warning' },
-      { value: git.deleted, label: 'deleted', color: 'error' },
-      { value: git.renamed, label: 'renamed', color: 'suggestion' },
-      { value: git.untracked, label: 'untracked', color: 'inactive' },
-    ].filter(count => count.value > 0)
+    const isLinked = git.worktree !== null
+
+    const sync: Chip[] = []
+
+    if (git.ahead > 0) {
+      sync.push({ key: 'ahead', text: `↑${git.ahead}`, color: 'success' })
+    }
+
+    if (git.behind > 0) {
+      sync.push({ key: 'behind', text: `↓${git.behind}`, color: 'warning' })
+    }
+
+    if (git.isDetached) {
+      sync.push({ key: 'detached', text: 'detached', color: 'warning' })
+    } else if (git.upstream === null) {
+      sync.push({ key: 'local', text: 'no upstream', color: 'subtle' })
+    }
+
+    const changes: Chip[] = [
+      { key: 'conflicted', value: git.conflicted, color: 'error' },
+      { key: 'added', value: git.added, color: 'success' },
+      { key: 'modified', value: git.modified, color: 'warning' },
+      { key: 'deleted', value: git.deleted, color: 'error' },
+      { key: 'renamed', value: git.renamed, color: 'suggestion' },
+      { key: 'untracked', value: git.untracked, color: 'autoAccept' },
+      { key: 'staged', value: git.staged, color: 'permission' },
+    ]
+      .filter(count => count.value > 0)
+      .map(({ key, value, color }) => ({ key, text: `${value} ${key}`, color }))
+
+    if (changedFiles(git) === 0) {
+      changes.push({ key: 'clean', text: '✓ clean', color: 'success' })
+    }
+
+    const drawChip = (chip: Chip) => (
+      <Box key={chip.key} flexShrink={0}>
+        <Text color={chip.color} bold weight="bold" wrap="truncate-end">
+          {chip.text}
+        </Text>
+      </Box>
+    )
 
     return (
-      <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="md" rowGap="xs">
-        <Box flexDirection="row" alignItems="center" columnGap="xs">
+      <Box flexDirection="row" flexWrap="nowrap" alignItems="center" columnGap="md" overflow="hidden">
+        <Box flexDirection="row" alignItems="center" columnGap="xs" paddingX={1} backgroundColor="claude" flexShrink={1}>
           {drawIcon('branch')}
-          <Text color="claude" weight="semibold" wrap="truncate-end">
+          <Text color={PILL_TEXT} bold weight="bold" wrap="truncate-end">
             {git.branch}
           </Text>
-          {git.isDetached && <Text dimColor>detached</Text>}
-          {git.ahead > 0 && <Text color="success">↑{git.ahead}</Text>}
-          {git.behind > 0 && <Text color="warning">↓{git.behind}</Text>}
-          {git.upstream === null && !git.isDetached && <Text dimColor>no upstream</Text>}
         </Box>
-        <Text dimColor>·</Text>
-        <Box flexDirection="row" alignItems="center" columnGap="xs">
+        {sync.map(drawChip)}
+        <Box
+          flexDirection="row"
+          alignItems="center"
+          columnGap="xs"
+          paddingX={1}
+          backgroundColor={isLinked ? 'merged' : 'permission'}
+          flexShrink={1}
+        >
           {drawIcon('worktree')}
-          {git.worktree === null ? (
-            <>
-              <Text weight="medium">{git.repo}</Text>
-              <Text dimColor>main worktree</Text>
-            </>
-          ) : (
-            <>
-              <Text color="merged" weight="medium">
-                {git.worktree}
-              </Text>
-              <Text dimColor>worktree of {git.repo}</Text>
-            </>
-          )}
+          <Text color={PILL_TEXT} bold weight="bold" wrap="truncate-end">
+            {git.worktree ?? git.repo}
+          </Text>
+          <Text color={PILL_TEXT} wrap="truncate-end">
+            {isLinked ? `worktree of ${git.repo}` : 'main checkout'}
+          </Text>
         </Box>
-        <Text dimColor>·</Text>
-        {changedFiles(git) === 0 ? (
-          <Box flexDirection="row" columnGap="xs">
-            <Text color="success">✓</Text>
-            <Text dimColor>clean</Text>
-          </Box>
-        ) : (
-          <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap="sm">
-            {counts.map(count => (
-              <Box key={count.label} flexDirection="row">
-                <Text color={count.color} weight="semibold" tabular>
-                  {count.value}
-                </Text>
-                <Text dimColor> {count.label}</Text>
-              </Box>
-            ))}
-            {git.staged > 0 && <Text dimColor>({git.staged} staged)</Text>}
-            {(git.insertions > 0 || git.deletions > 0) && (
-              <Box flexDirection="row" columnGap="xs">
-                <Text color="success" tabular>
-                  +{git.insertions}
-                </Text>
-                <Text color="error" tabular>
-                  −{git.deletions}
-                </Text>
-                <Text dimColor>lines</Text>
-              </Box>
-            )}
+        {changes.map(drawChip)}
+        {(git.insertions > 0 || git.deletions > 0) && (
+          <Box flexDirection="row" columnGap="xs" flexShrink={0}>
+            <Text color="success" bold weight="bold" tabular>
+              +{git.insertions}
+            </Text>
+            <Text color="error" bold weight="bold" tabular>
+              −{git.deletions}
+            </Text>
           </Box>
         )}
       </Box>

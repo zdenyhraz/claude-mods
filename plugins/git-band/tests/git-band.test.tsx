@@ -78,7 +78,7 @@ test('a linked worktree with changes shows its branch, worktree and counts, on t
       expect(await ui.find({ type: 'Text', text: new RegExp(` ${label}$`) })).toBeDefined()
     }
 
-    expect((await ui.find({ type: 'Text', text: /staged/ }))?.text).toBe('(3 staged)')
+    expect((await ui.find({ type: 'Text', text: /staged/ }))?.text).toBe('3 staged')
     expect((await ui.find({ type: 'Text', text: /^\+\d/ }))?.text).toBe('+120')
     expect((await ui.find({ type: 'Text', text: /^−\d/ }))?.text).toBe('−8')
     await ui.unmount()
@@ -91,8 +91,8 @@ test('a clean main worktree says clean', async ($, on) => {
 
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
 
-  expect((await ui.find({ type: 'Text', text: /main worktree/ }))?.text).toBe('main worktree')
-  expect((await ui.find({ type: 'Text', text: /clean/ }))?.text).toBe('clean')
+  expect((await ui.find({ type: 'Text', text: /main checkout/ }))?.text).toBe('main checkout')
+  expect((await ui.find({ type: 'Text', text: /clean/ }))?.text).toBe('✓ clean')
   expect(await ui.find({ type: 'Text', text: /↑|↓/ })).toBeUndefined()
   await ui.unmount()
 })
@@ -178,7 +178,7 @@ test('entering and leaving a worktree updates the band at once', async ($, on) =
   fakeWorld(on)
   const clock = await start($, on)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect(await ui.find({ type: 'Text', text: /main worktree/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /main checkout/ })).toBeDefined()
 
   await $.tool.call({ tool: 'EnterWorktree', name: 'feature-x' })
   await clock.settle()
@@ -187,6 +187,6 @@ test('entering and leaving a worktree updates the band at once', async ($, on) =
 
   await $.tool.call({ tool: 'ExitWorktree', action: 'keep' })
   await clock.settle()
-  expect(await ui.find({ type: 'Text', text: /main worktree/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /main checkout/ })).toBeDefined()
   await ui.unmount()
 })

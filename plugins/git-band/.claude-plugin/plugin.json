@@ -1,6 +1,6 @@
 {
   "name": "git-band",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "A band above the prompt with the session's git branch, worktree, ahead/behind and changed-file counts.",
   "author": { "name": "zdenyhraz", "url": "https://github.com/zdenyhraz" },
   "homepage": "https://github.com/zdenyhraz/claude-mods/tree/main/plugins/git-band",

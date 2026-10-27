@@ -1,15 +1,18 @@
 # git-band
 
-A band above the Claude Code prompt that shows where the session is in git:
+A band above the Claude Code prompt that shows where the session is in git, on one line:
 
-- **Branch**: its name, `↑n` / `↓n` ahead of and behind its upstream, `no upstream` when it has none, and
-  the short commit id when the checkout is detached.
-- **Worktree**: `<repo> · main worktree`, or `<name> · worktree of <repo>` in a linked worktree.
-- **Changes**: conflicted, added, modified, deleted, renamed and untracked files, each counted once in
-  its own colour, how many are staged, and `+lines −lines` against `HEAD`. A clean tree shows `✓ clean`.
+- **Branch**: a pill in the theme's accent colour with the branch name, or the short commit id when the
+  checkout is detached; then `↑n` / `↓n` ahead of and behind its upstream, or `no upstream`.
+- **Worktree**: a blue pill `<repo> main checkout`, or a purple one `<name> worktree of <repo>` in a linked
+  worktree.
+- **Changes**: conflicted, added, modified, deleted, renamed and untracked files, each counted once, how many
+  are staged, and `+lines −lines` against `HEAD`, all in bold and each in its own colour. A clean tree shows
+  `✓ clean`.
 
-The band follows the person's theme. On the desktop app the branch and worktree marks are small icons;
-in the terminal they are glyphs.
+Colours are theme keys, so the band follows the person's theme; only the text and icons inside the pills
+are white. On the desktop app the branch and worktree marks are small icons; in the terminal they are
+glyphs. A narrow window shortens the pills rather than wrapping the band.
 
 ## How it stays current
 
