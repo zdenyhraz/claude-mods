@@ -2,6 +2,8 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
+import { describe, drawDashboard, groupsOf, sliceTones } from '../hooks/look'
+
 type TestEngine = Parameters<TestBody>[0]
 
 const BAND = {
@@ -56,10 +58,20 @@ function fakeGit(on: On, layout: string | null, porcelain: string, shortstat = '
 async function start($: TestEngine, on: On) {
   const clock = mock.clock(on)
   on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('classic.FileChanged', () => ({}))
   await $.session.start({ cwd: 'C:/code/my-app', surface: 'desktop', isInteractive: true })
   await clock.settle()
 
   return clock
+}
+
+type Drawing = { find: (query: { type: 'Svg' | 'Box' }) => Promise<{ text: string; props: Record<string, unknown> } | undefined> }
+
+// The desktop band is one image whose alt names every part; the terminal band is text.
+async function shown(ui: Drawing): Promise<string> {
+  const image = await ui.find({ type: 'Svg' })
+
+  return image ? String(image.props.alt) : ((await ui.find({ type: 'Box' }))?.text ?? '')
 }
 
 test('a linked worktree with changes shows its branch, worktree and counts, on terminal and desktop', async ($, on) => {
@@ -68,32 +80,28 @@ test('a linked worktree with changes shows its branch, worktree and counts, on t
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...BAND, surface })
+    const text = await shown(ui)
 
-    expect((await ui.find({ type: 'Text', text: /^feature-x$/ }))?.text).toBe('feature-x')
-    expect((await ui.find({ type: 'Text', text: /↑/ }))?.text).toBe('↑2')
-    expect((await ui.find({ type: 'Text', text: /↓/ }))?.text).toBe('↓1')
-    expect((await ui.find({ type: 'Text', text: /worktree of/ }))?.text).toBe('worktree of my-app')
-
-    for (const label of ['conflicted', 'added', 'modified', 'deleted', 'renamed', 'untracked']) {
-      expect(await ui.find({ type: 'Text', text: new RegExp(` ${label}$`) })).toBeDefined()
+    for (const part of ['my-app', 'feature-x', '↑2', '↓1', '!1', '+1', '~2', '−1', '→1', '?2', '●3', '+120', '−8']) {
+      expect(text).toContain(part)
     }
 
-    expect((await ui.find({ type: 'Text', text: /staged/ }))?.text).toBe('3 staged')
-    expect((await ui.find({ type: 'Text', text: /^\+\d/ }))?.text).toBe('+120')
-    expect((await ui.find({ type: 'Text', text: /^−\d/ }))?.text).toBe('−8')
+    expect(text).not.toContain('clean')
     await ui.unmount()
   }
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(await shown(ui)).toBe('repo my-app · worktree feature-x · branch feature-x ↑2 ↓1 · changes !1 +1 ~2 −1 →1 ?2 ●3 +120 −8')
+  await ui.unmount()
 })
 
-test('a clean main worktree says clean', async ($, on) => {
+test('a clean main worktree shows the repo, branch and clean, with no worktree group', async ($, on) => {
   fakeGit(on, MAIN_LAYOUT, CLEAN)
   await start($, on)
 
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
 
-  expect((await ui.find({ type: 'Text', text: /main checkout/ }))?.text).toBe('main checkout')
-  expect((await ui.find({ type: 'Text', text: /clean/ }))?.text).toBe('✓ clean')
-  expect(await ui.find({ type: 'Text', text: /↑|↓/ })).toBeUndefined()
+  expect(await shown(ui)).toBe('repo my-app · branch main · changes ✓ clean')
   await ui.unmount()
 })
 
@@ -112,7 +120,7 @@ test('outside a repository the band is left to the engine', async ($, on) => {
   await ui.unmount()
 })
 
-test('the band picks up a change on the next poll', async ($, on) => {
+test("nothing refreshes on a timer, and a change to git's files does", async ($, on) => {
   let porcelain = CLEAN
   on('process.run', (_, e) => {
     const args = e.argv.join(' ')
@@ -123,13 +131,17 @@ test('the band picks up a change on the next poll', async ($, on) => {
   const clock = await start($, on)
 
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect(await ui.find({ type: 'Text', text: /clean/ })).toBeDefined()
+  expect(await shown(ui)).toContain('clean')
 
   porcelain = `${CLEAN}\n? fresh.txt`
-  await clock.advance(10_000)
+  await clock.advance(120_000)
+  expect(await shown(ui)).toContain('clean')
 
-  expect(await ui.find({ type: 'Text', text: / untracked$/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /clean/ })).toBeUndefined()
+  await $.classic.FileChanged({ file_path: 'C:/code/my-app/.git/index', event: 'change' })
+  await clock.advance(500)
+
+  expect(await shown(ui)).toContain('?1')
+  expect(await shown(ui)).not.toContain('clean')
   await ui.unmount()
 })
 
@@ -165,12 +177,12 @@ test("a subagent's tool calls leave the band to the session", async ($, on) => {
 
   world.porcelain = `${CLEAN}\n? from-subagent.txt`
   await $.tool.call({ tool: 'Bash', command: 'touch from-subagent.txt', agentId: 'a1' })
-  await clock.settle()
-  expect(await ui.find({ type: 'Text', text: /clean/ })).toBeDefined()
+  await clock.advance(500)
+  expect(await shown(ui)).toContain('clean')
 
   await $.tool.call({ tool: 'Bash', command: 'git status' })
-  await clock.settle()
-  expect(await ui.find({ type: 'Text', text: / untracked$/ })).toBeDefined()
+  await clock.advance(500)
+  expect(await shown(ui)).toContain('?1')
   await ui.unmount()
 })
 
@@ -178,15 +190,225 @@ test('entering and leaving a worktree updates the band at once', async ($, on) =
   fakeWorld(on)
   const clock = await start($, on)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect(await ui.find({ type: 'Text', text: /main checkout/ })).toBeDefined()
+  expect(await shown(ui)).not.toContain('worktree')
 
   await $.tool.call({ tool: 'EnterWorktree', name: 'feature-x' })
-  await clock.settle()
-  expect((await ui.find({ type: 'Text', text: /^feature-x$/ }))?.text).toBe('feature-x')
-  expect((await ui.find({ type: 'Text', text: /worktree of/ }))?.text).toBe('worktree of my-app')
+  await clock.advance(500)
+  expect(await shown(ui)).toContain('worktree feature-x · branch feature-x')
 
   await $.tool.call({ tool: 'ExitWorktree', action: 'keep' })
-  await clock.settle()
-  expect(await ui.find({ type: 'Text', text: /main checkout/ })).toBeDefined()
+  await clock.advance(500)
+  expect(await shown(ui)).toBe('repo my-app · branch main · changes ✓ clean')
   await ui.unmount()
+})
+
+test('a git command that fails keeps the band as it last was', async ($, on) => {
+  const world = { fails: false }
+  on('process.run', (_, e) => {
+    const args = e.argv.join(' ')
+
+    if (world.fails && args.includes('status')) {
+      return { value: { exitCode: 128, stdout: '', stderr: 'fatal: unable to read index', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+
+    const stdout = args.includes('rev-parse') ? MAIN_LAYOUT : args.includes('status') ? CLEAN : ''
+
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  const clock = await start($, on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  world.fails = true
+  await $.classic.FileChanged({ file_path: 'C:/code/my-app/.git/index', event: 'change' })
+  await clock.advance(500)
+
+  expect(await shown(ui)).toBe('repo my-app · branch main · changes ✓ clean')
+  await ui.unmount()
+})
+
+test('a survey shows below the band instead of hiding it', async ($, on) => {
+  fakeGit(on, MAIN_LAYOUT, CLEAN)
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+
+    return <Text>How is Claude doing?</Text>
+  })
+  await start($, on)
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...BAND, surface, props: { ...BAND.props, hasSurvey: true } })
+
+    expect(await shown(ui)).toContain('main')
+    expect(await ui.find({ type: 'Text', text: /Claude doing/ })).toBeDefined()
+    await ui.unmount()
+  }
+})
+
+test('starting or reloading asks for the band to be drawn again', async ($, on) => {
+  const asked: string[] = []
+  on('ui.invalidate', (_, e) => {
+    asked.push(e.event)
+
+    return { value: undefined }
+  })
+  fakeGit(on, MAIN_LAYOUT, CLEAN)
+  await start($, on)
+
+  expect(asked.filter(event => event === 'ui.render').length).toBe(2)
+})
+
+test("the session watches git's own files for changes made outside it", async ($, on) => {
+  fakeGit(on, WORKTREE_LAYOUT, DIRTY)
+  on('classic.SessionStart', () => ({}))
+  await start($, on)
+
+  const result = await $.classic.SessionStart({ source: 'startup' })
+
+  expect(result.watchPaths).toEqual([
+    'C:/code/my-app/.git/worktrees/feature-x/HEAD',
+    'C:/code/my-app/.git/worktrees/feature-x/index',
+    'C:/code/my-app/.git/worktrees/feature-x/logs/HEAD',
+    'C:/code/my-app/.git/FETCH_HEAD',
+  ])
+})
+
+const SMALL_REPO = {
+  repo: 'a<b>&c',
+  branch: 'main',
+  isDetached: false,
+  worktree: null,
+  upstream: 'origin/main',
+  ahead: 0,
+  behind: 0,
+  staged: 0,
+  added: 0,
+  modified: 1,
+  deleted: 0,
+  renamed: 0,
+  untracked: 0,
+  conflicted: 0,
+  insertions: 3,
+  deletions: 1,
+}
+
+test('the desktop image is one line without usage or agents, follows the theme and escapes names', () => {
+  const image = drawDashboard({ git: SMALL_REPO, usage: null, agents: [], now: 0 }, 720)
+
+  expect(describe(groupsOf(SMALL_REPO))).toBe('repo a<b>&c · branch main · changes ~1 +3 −1')
+  expect(image.source).toContain('a&lt;b&gt;&amp;c')
+  expect(image.source).toContain('@media (prefers-color-scheme: light)')
+  expect(image.source).not.toContain('<rect')
+  expect(image.height).toBe(22)
+})
+
+test('the desktop image grows a context row and a row of agent cards', () => {
+  const usage = { tokens: 84_000, window: 200_000, percent: 42, slices: [{ name: 'Messages', tokens: 53_400, color: 'autoAccept' }], limits: [] }
+  const running = { id: 'a1', name: 'Explore auth flow', type: 'Explore', status: 'running', startedAt: 0, tools: 14 }
+  const image = drawDashboard({ git: SMALL_REPO, usage, agents: [running], now: 72_000 }, 720)
+
+  expect(image.source).toContain('Explore auth flow')
+  expect(image.source).toContain('1m 12s')
+  expect(image.source).toContain('class="s-sky"')
+  expect(image.source).toContain('42%')
+  expect(image.height).toBe(22 + 4 + 22 + 8 + 56)
+})
+
+test('a narrower band keeps the text size: the bar shrinks, the branch shortens and cards wrap', () => {
+  const usage = {
+    tokens: 84_000,
+    window: 200_000,
+    percent: 42,
+    slices: [{ name: 'Messages', tokens: 53_400, color: 'autoAccept' }],
+    limits: [{ kind: 'five_hour', percent: 31 }, { kind: 'seven_day', percent: 18 }],
+  }
+  const agents = ['a', 'b', 'c', 'd', 'e'].map(id => ({ id, name: `Task ${id}`, type: 'Explore', status: 'running', startedAt: 0, tools: 1 }))
+  const git = { ...SMALL_REPO, repo: 'my-app', branch: 'zdenyhraz/long-feature-branch' }
+  const wide = drawDashboard({ git, usage, agents, now: 0 }, 900)
+  const narrow = drawDashboard({ git, usage, agents, now: 0 }, 420)
+  const barWidth = (source: string): number => Number(/<rect class="f-free" x="21" y="[\d.]+" width="([\d.]+)"/.exec(source)?.[1])
+  const fontSizes = (source: string): string[] => source.match(/font-size:[\d.]+px/g) ?? []
+
+  expect(wide.width).toBe(900)
+  expect(narrow.width).toBe(420)
+  expect(fontSizes(narrow.source)).toEqual(fontSizes(wide.source))
+  expect(barWidth(narrow.source)).toBeLessThan(barWidth(wide.source) - 400)
+  expect(wide.source).toContain('long-feature-branch')
+  expect(narrow.source).not.toContain('long-feature-branch')
+  expect(wide.height).toBe(22 + 4 + 22 + 8 + 56)
+  expect(narrow.height).toBe(22 + 4 + 22 + 8 + 56 + 6 + 56)
+})
+
+function fakeUsage(on: On) {
+  const context = { tokens: 84_000, window: 200_000, percent: 42 }
+  const categories = [
+    { name: 'System prompt', tokens: 3_100, color: 'promptBorder', isDeferred: false, kind: 'used' },
+    { name: 'Messages', tokens: 53_400, color: 'autoAccept', isDeferred: false, kind: 'used' },
+    { name: 'Free space', tokens: 116_000, color: 'promptBorder', isDeferred: false, kind: 'free' },
+  ]
+  on('session.usage', () => ({ value: { startedAt: 0, context: { ...context, breakdown: { categories } }, rateLimits: [] } }) as never)
+
+  return context
+}
+
+test('context and the session and weekly limits come from each measurement', async ($, on) => {
+  fakeGit(on, MAIN_LAYOUT, CLEAN)
+  const context = fakeUsage(on)
+  on('session.measure', (_, e) => ({ changed: e.changed }))
+  const clock = await start($, on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  await $.session.measure({
+    context,
+    rateLimits: [
+      { kind: 'five_hour', percentUsed: 31 },
+      { kind: 'seven_day', percentUsed: 18 },
+    ],
+    changed: ['context'],
+  } as never)
+  await clock.settle()
+
+  expect(await shown(ui)).toBe('repo my-app · branch main · changes ✓ clean · context 42% 84k/200k · 5h 31% · week 18%')
+  await ui.unmount()
+})
+
+test('subagents show while they run, count their tools, stop the clock when done and leave on the next prompt', async ($, on) => {
+  const world = { status: 'running' }
+  fakeGit(on, MAIN_LAYOUT, CLEAN)
+  on('agent.list', () => ({ value: [{ id: 'a1', description: 'Explore auth flow', type: 'Explore', status: world.status }] }) as never)
+  on('tool.call', () => ({ result: {} }))
+  on('prompt.submit', (_, e) => ({ text: e.text }) as never)
+  const clock = await start($, on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  expect(await shown(ui)).toContain('agent running Explore auth flow 0s 0 tools')
+
+  await $.tool.call({ tool: 'Bash', command: 'ls', agentId: 'a1' })
+  await $.tool.call({ tool: 'Bash', command: 'ls', agentId: 'a1' })
+  await clock.advance(5_000)
+  expect(await shown(ui)).toContain('agent running Explore auth flow 5s 2 tools')
+
+  world.status = 'completed'
+  await clock.advance(5_000)
+  expect(await shown(ui)).toContain('agent done Explore auth flow 10s 2 tools')
+
+  await clock.advance(30_000)
+  expect(await shown(ui)).toContain('agent done Explore auth flow 10s 2 tools')
+
+  await $.prompt.submit({ text: 'next' } as never)
+  await clock.settle()
+  expect(await shown(ui)).not.toContain('agent')
+  await ui.unmount()
+})
+
+test('every context slice gets a hue of its own, even where /context gives greys', () => {
+  const tones = sliceTones([
+    { name: 'System prompt', tokens: 3_100, color: 'promptBorder' },
+    { name: 'System tools', tokens: 14_200, color: 'inactive' },
+    { name: 'Memory files', tokens: 2_400, color: 'warning' },
+    { name: 'Messages', tokens: 53_400, color: 'unknownKey' },
+  ])
+
+  expect(new Set(tones).size).toBe(4)
+  expect(tones).not.toContain('gray')
+  expect(tones[2]).toBe('warning')
 })

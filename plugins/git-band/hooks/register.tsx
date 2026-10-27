@@ -1,63 +1,106 @@
 import { atom, read, update } from 'claude-code'
-import type { Color, EngineInterface, Register } from 'claude-code'
+import type { Color, EngineInterface, ProcessRunResult, Register, SessionContextUsage, SessionRateLimit } from 'claude-code'
 
-import type { GitStatus } from '../types'
-import { changedFiles, parseBranch, parseFiles, parseLayout, parseShortstat, repoName, worktreeName } from './git'
+import type { AgentView, GitStatus, UsageView } from '../types'
+import { parseBranch, parseFiles, parseLayout, parseShortstat, repoName, worktreeName } from './git'
+import type { Layout } from './git'
+import { agentTime, describeDashboard, drawDashboard, groupsOf, isActive, kilo, limitName, limitTone, orderAgents, sliceTones, stateOf } from './look'
+import type { Dashboard, Icon, Tone } from './look'
 
-const POLL_MS = 10_000
+const SETTLE_MS = 300
+const TICK_MS = 5_000
+// The desktop lays the band out in cells; this is a cell's width in CSS pixels there, so the image can be drawn
+// at the band's own width rather than scaled into it.
+const PX_PER_COLUMN = 7.6
 const REFRESHING_TOOLS = /^(Bash|PowerShell|Edit|Write|NotebookEdit|EnterWorktree|ExitWorktree)$/
 
 const status = atom({ plugin: 'git-band', key: 'status' } as const, null)
+const usage = atom({ plugin: 'git-band', key: 'usage' } as const, null)
+const agents = atom({ plugin: 'git-band', key: 'agents' } as const, [])
 
-// Pills are theme colours with white text; Svg is an isolated image that cannot follow the theme, so its stroke is white too.
-const PILL_TEXT = '#ffffff'
-
-const icon = (body: string): string =>
-  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="${PILL_TEXT}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`
-
-const ICONS = {
-  branch: icon('<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>'),
-  worktree: icon('<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>'),
+// The terminal draws text alone, so each tone of the desktop's image maps to the theme key nearest it.
+const THEME_KEYS: Record<Tone, Color> = {
+  text: 'text',
+  subtle: 'subtle',
+  inactive: 'inactive',
+  claude: 'claude',
+  success: 'success',
+  error: 'error',
+  warning: 'warning',
+  blue: 'permission',
+  violet: 'merged',
+  teal: 'planMode',
+  sky: 'ide',
+  pink: 'bashBorder',
+  gray: 'inactive',
+  free: 'subtle',
+  line: 'subtle',
 }
 
-const GLYPHS = { branch: '⎇', worktree: '▣' }
+const GLYPHS: Partial<Record<Icon, string>> = { repo: '▤', worktree: '⑂', branch: '⎇' }
 
-type Chip = { key: string; text: string; color: Color }
+// The band redraws for reasons of the app's own (a turn starting, a resize); the image is rebuilt only when what it shows changed.
+let cached: { key: string; image: ReturnType<typeof drawDashboard> } | null = null
 
-async function git($: EngineInterface, args: string[]): Promise<string | null> {
-  const result = await $.process.run(['git', '--no-optional-locks', ...args], { timeoutMs: 15_000 }).catch(() => null)
+function cachedDashboard(board: Dashboard, columns: number): { image: ReturnType<typeof drawDashboard>; alt: string } {
+  const alt = describeDashboard(board)
+  const key = `${columns} ${alt}`
 
-  return result?.exitCode === 0 ? result.stdout : null
-}
-
-async function readStatus($: EngineInterface): Promise<GitStatus | null> {
-  const layoutText = await git($, ['rev-parse', '--path-format=absolute', '--show-toplevel', '--git-dir', '--git-common-dir'])
-  const layout = layoutText === null ? null : parseLayout(layoutText)
-
-  if (layout === null) {
-    return null
+  if (cached?.key !== key) {
+    cached = { key, image: drawDashboard(board, columns * PX_PER_COLUMN) }
   }
 
-  const [porcelain, shortstat] = await Promise.all([
+  return { image: cached.image, alt }
+}
+
+async function git($: EngineInterface, args: string[]): Promise<ProcessRunResult | null> {
+  return $.process.run(['git', '--no-optional-locks', ...args], { timeoutMs: 15_000 }).catch(() => null)
+}
+
+// null outside a repository; undefined when git could not answer, so the band keeps what it last knew.
+async function readLayout($: EngineInterface): Promise<Layout | null | undefined> {
+  const run = await git($, ['rev-parse', '--path-format=absolute', '--show-toplevel', '--git-dir', '--git-common-dir'])
+
+  if (run === null) {
+    return undefined
+  }
+
+  if (run.exitCode !== 0) {
+    return /not a git repository/i.test(run.stderr) ? null : undefined
+  }
+
+  return parseLayout(run.stdout) ?? undefined
+}
+
+async function readStatus($: EngineInterface): Promise<GitStatus | null | undefined> {
+  const layout = await readLayout($)
+
+  if (!layout) {
+    return layout
+  }
+
+  const [statusRun, diffRun] = await Promise.all([
     git($, ['status', '--porcelain=v2', '--branch']),
     git($, ['diff', 'HEAD', '--shortstat']),
   ])
 
-  if (porcelain === null) {
-    return null
+  if (statusRun?.exitCode !== 0) {
+    return undefined
   }
 
   return {
     repo: repoName(layout),
     worktree: worktreeName(layout),
-    ...parseBranch(porcelain),
-    ...parseFiles(porcelain),
-    ...parseShortstat(shortstat ?? ''),
+    ...parseBranch(statusRun.stdout),
+    ...parseFiles(statusRun.stdout),
+    ...parseShortstat(diffRun?.exitCode === 0 ? diffRun.stdout : ''),
   }
 }
 
 let isRefreshing = false
 let isQueued = false
+let isScheduled = false
+let isAwaitingPerson = false
 let lastJson = ''
 
 async function refresh($: EngineInterface): Promise<void> {
@@ -74,9 +117,10 @@ async function refresh($: EngineInterface): Promise<void> {
       const fresh = await readStatus($)
       const json = JSON.stringify(fresh)
 
-      if (json !== lastJson) {
+      if (fresh !== undefined && json !== lastJson) {
         lastJson = json
         await update($, status, () => fresh)
+        $.ui.invalidate('ui.render')
       }
     } while (isQueued)
   } finally {
@@ -84,21 +128,189 @@ async function refresh($: EngineInterface): Promise<void> {
   }
 }
 
+// Runs once, a moment later rather than in the hook, so a burst of events is one refresh and none is cut short with its dispatch.
+function scheduleRefresh($: EngineInterface): void {
+  if (isScheduled) {
+    return
+  }
+
+  isScheduled = true
+  $.clock.after(SETTLE_MS, () => {
+    isScheduled = false
+    void refresh($)
+  })
+}
+
+// Every command that commits, checks out, stages, resets, merges, rebases or fetches writes one of these.
+async function gitFilesToWatch($: EngineInterface): Promise<string[]> {
+  const layout = await readLayout($)
+
+  if (!layout) {
+    return []
+  }
+
+  return [`${layout.gitDir}/HEAD`, `${layout.gitDir}/index`, `${layout.gitDir}/logs/HEAD`, `${layout.commonDir}/FETCH_HEAD`]
+}
+
+// The breakdown is estimated locally ('summary'): no request is sent for it.
+async function recordUsage($: EngineInterface, context: SessionContextUsage, limits: readonly SessionRateLimit[]): Promise<void> {
+  const detailed = await $.session.usage({ breakdown: 'summary' }).catch(() => null)
+  const categories = detailed?.context.breakdown?.categories ?? []
+  const fresh: UsageView = {
+    tokens: context.tokens ?? 0,
+    window: context.window,
+    percent: Math.round(context.percent ?? 0),
+    slices: categories.filter(slice => slice.kind === 'used').map(slice => ({ name: slice.name, tokens: slice.tokens, color: slice.color })),
+    limits: limits.map(limit => ({ kind: limit.kind, percent: limit.percentUsed, resetsAt: limit.resetsAt })),
+  }
+
+  await update($, usage, () => fresh)
+}
+
+let ticker: { cancel: () => void } | null = null
+
+// While an agent is active its time and state move without an event to say so; nothing ticks otherwise.
+function tickWhileActive($: EngineInterface, list: readonly AgentView[]): void {
+  const isAnyActive = list.some(isActive)
+
+  if (isAnyActive && ticker === null) {
+    ticker = $.clock.every(TICK_MS, () => void syncAgents($))
+  } else if (!isAnyActive && ticker !== null) {
+    ticker.cancel()
+    ticker = null
+  }
+}
+
+async function syncAgents($: EngineInterface): Promise<void> {
+  const [infos, now] = await Promise.all([$.agent.list().catch(() => null), $.clock.now()])
+
+  if (infos === null) {
+    return
+  }
+
+  const next = await update($, agents, current => {
+    const known = new Map(current.map(agent => [agent.id, agent]))
+
+    for (const info of infos) {
+      const seen = known.get(info.id)
+      const base = seen ?? { id: info.id, name: info.description, type: info.type, status: info.status, startedAt: now, tools: 0 }
+      const view: AgentView = { ...base, status: info.status }
+
+      if (!isActive(view) && view.endedAt === undefined) {
+        view.endedAt = now
+      }
+
+      known.set(info.id, view)
+    }
+
+    return [...known.values()]
+  })
+
+  tickWhileActive($, next)
+  $.ui.invalidate('ui.render')
+}
+
+async function addAgent($: EngineInterface, id: string, name: string, type: string): Promise<void> {
+  const now = await $.clock.now()
+  const next = await update($, agents, current => [
+    ...current.filter(agent => agent.id !== id),
+    { id, name, type, status: 'running', startedAt: now, tools: 0 },
+  ])
+
+  tickWhileActive($, next)
+}
+
+async function countTool($: EngineInterface, id: string): Promise<void> {
+  await update($, agents, current => current.map(agent => (agent.id === id ? { ...agent, tools: agent.tools + 1 } : agent)))
+}
+
+// A new prompt starts a new piece of work: agents that already finished leave the dashboard.
+async function dropFinished($: EngineInterface): Promise<void> {
+  await update($, agents, current => current.filter(isActive))
+}
+
 export const register: Register = on => {
+  // A reload keeps the values in $.state but not the band's drawing, which otherwise waits for the next prompt.
   on('session.start', async ($, e, next) => {
     const result = await next(e)
+    isAwaitingPerson = true
+    $.ui.invalidate('ui.render')
     void refresh($)
-    $.clock.every(POLL_MS, () => void refresh($))
+    void syncAgents($)
+    const now = await $.session.usage().catch(() => null)
+
+    if (now) {
+      void recordUsage($, now.context, now.rateLimits)
+    }
 
     return result
   })
 
-  // A subagent's hooks read its own directory, which may be another worktree than the session's.
-  on('tool.call', { tool: REFRESHING_TOOLS }, async ($, e, next) => {
+  on('session.measure', async ($, e, next) => {
+    const result = await next(e)
+    void recordUsage($, e.context, e.rateLimits)
+
+    return result
+  })
+
+  on('classic.SessionStart', async ($, e, next) => {
+    const result = await next(e)
+    const paths = await gitFilesToWatch($)
+
+    return paths.length === 0 ? result : { ...result, watchPaths: [...(result.watchPaths ?? []), ...paths] }
+  })
+
+  on('classic.FileChanged', async ($, e, next) => {
+    const result = await next(e)
+    scheduleRefresh($)
+
+    return result
+  })
+
+  on('classic.CwdChanged', async ($, e, next) => {
+    const result = await next(e)
+    scheduleRefresh($)
+
+    return result
+  })
+
+  // Catches edits made outside the session (an editor, a terminal) once the person is back at the prompt.
+  on('prompt.edit', async ($, e, next) => {
     const result = await next(e)
 
-    if (e.agentId === undefined) {
-      void refresh($)
+    if (isAwaitingPerson) {
+      isAwaitingPerson = false
+      scheduleRefresh($)
+    }
+
+    return result
+  }).catch(($, e, next) => next(e))
+
+  on('prompt.submit', async ($, e, next) => {
+    const result = await next(e)
+    void dropFinished($)
+
+    return result
+  }).catch(($, e, next) => next(e))
+
+  on('agent.spawn', async ($, e, next) => {
+    const result = await next(e)
+
+    if ('agentId' in result && typeof result.agentId === 'string') {
+      void addAgent($, result.agentId, e.description, e.subagentType)
+    }
+
+    return result
+  }).catch(($, e, next) => next(e))
+
+  // A subagent's hooks read its own directory, which may be another worktree than the session's.
+  on('tool.call', async ($, e, next) => {
+    const result = await next(e)
+
+    if (e.agentId !== undefined) {
+      void countTool($, e.agentId)
+    } else if (REFRESHING_TOOLS.test(e.tool)) {
+      scheduleRefresh($)
     }
 
     return result
@@ -108,113 +320,86 @@ export const register: Register = on => {
     const result = await next(e)
 
     if (e.agentId === undefined) {
-      void refresh($)
+      isAwaitingPerson = true
+      scheduleRefresh($)
     }
+
+    void syncAgents($)
 
     return result
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const git = await read($, status)
+    const gitStatus = await read($, status)
 
-    if (git === null || e.props.hasSurvey) {
+    if (gitStatus === null) {
       return next(e)
     }
 
+    const board: Dashboard = { git: gitStatus, usage: await read($, usage), agents: await read($, agents), now: await $.clock.now() }
     const { Box, Text } = $.ui.resolve(e)
+    let band
 
-    const drawIcon = (name: keyof typeof ICONS) => {
-      if (e.surface === 'terminal') {
-        return (
-          <Text color={PILL_TEXT} bold>
-            {GLYPHS[name]}
-          </Text>
-        )
-      }
-
-      const { Svg } = $.ui.resolve(e)
-
-      return <Svg source={ICONS[name]} alt={name} width={14} height={14} />
-    }
-
-    const isLinked = git.worktree !== null
-
-    const sync: Chip[] = []
-
-    if (git.ahead > 0) {
-      sync.push({ key: 'ahead', text: `↑${git.ahead}`, color: 'success' })
-    }
-
-    if (git.behind > 0) {
-      sync.push({ key: 'behind', text: `↓${git.behind}`, color: 'warning' })
-    }
-
-    if (git.isDetached) {
-      sync.push({ key: 'detached', text: 'detached', color: 'warning' })
-    } else if (git.upstream === null) {
-      sync.push({ key: 'local', text: 'no upstream', color: 'subtle' })
-    }
-
-    const changes: Chip[] = [
-      { key: 'conflicted', value: git.conflicted, color: 'error' },
-      { key: 'added', value: git.added, color: 'success' },
-      { key: 'modified', value: git.modified, color: 'warning' },
-      { key: 'deleted', value: git.deleted, color: 'error' },
-      { key: 'renamed', value: git.renamed, color: 'suggestion' },
-      { key: 'untracked', value: git.untracked, color: 'autoAccept' },
-      { key: 'staged', value: git.staged, color: 'permission' },
-    ]
-      .filter(count => count.value > 0)
-      .map(({ key, value, color }) => ({ key, text: `${value} ${key}`, color }))
-
-    if (changedFiles(git) === 0) {
-      changes.push({ key: 'clean', text: '✓ clean', color: 'success' })
-    }
-
-    const drawChip = (chip: Chip) => (
-      <Box key={chip.key} flexShrink={0}>
-        <Text color={chip.color} bold weight="bold" wrap="truncate-end">
-          {chip.text}
+    // Box borders on the desktop take a whole row above and below; one image keeps the dashboard compact.
+    if (e.surface === 'terminal') {
+      const word = (content: string, tone: Tone) => (
+        <Text color={THEME_KEYS[tone]} bold wrap="truncate-end">
+          {content}
         </Text>
-      </Box>
-    )
+      )
+
+      band = (
+        <Box flexDirection="column">
+          <Box flexDirection="row" columnGap="md" overflow="hidden">
+            {groupsOf(board.git).map(group => (
+              <Box key={group.key} flexDirection="row" columnGap="sm" flexShrink={group.key === 'changes' ? 0 : 1}>
+                {group.icon && GLYPHS[group.icon.name] && word(GLYPHS[group.icon.name] ?? '', group.icon.tone)}
+                {group.tokens.map(token => word(token.text, token.tone))}
+              </Box>
+            ))}
+            {board.usage?.limits.map(limit => (
+              <Box key={limit.kind} flexDirection="row" columnGap="sm">
+                {word(limitName(limit.kind), 'gray')}
+                {word(`${Math.round(limit.percent)}%`, limitTone(limit.percent))}
+              </Box>
+            ))}
+          </Box>
+          {board.usage && (
+            <Box flexDirection="row" columnGap="sm" overflow="hidden">
+              {word(`context ${board.usage.percent}%`, limitTone(board.usage.percent))}
+              {word(`${kilo(board.usage.tokens)}/${kilo(board.usage.window)}`, 'gray')}
+              {board.usage.slices.map((slice, index) => word(`${slice.name} ${kilo(slice.tokens)}`, sliceTones(board.usage?.slices ?? [])[index] ?? 'gray'))}
+            </Box>
+          )}
+          {orderAgents(board.agents).map(agent => (
+            <Box key={agent.id} flexDirection="row" columnGap="sm" overflow="hidden">
+              {word(stateOf(agent.status).glyph, stateOf(agent.status).tone)}
+              {word(agent.name, isActive(agent) ? 'text' : 'inactive')}
+              {word(`${agent.type} · ${agent.tools} tools · ${agentTime(agent, board.now)}`, 'gray')}
+            </Box>
+          ))}
+        </Box>
+      )
+    } else {
+      const { Svg } = $.ui.resolve(e)
+      const { image, alt } = cachedDashboard(board, e.props.bodyColumns)
+      band = (
+        <Box flexDirection="row">
+          <Svg source={image.source} alt={alt} width={image.width} height={image.height} />
+        </Box>
+      )
+    }
+
+    if (!e.props.hasSurvey) {
+      return band
+    }
+
+    const survey = await next(e)
 
     return (
-      <Box flexDirection="row" flexWrap="nowrap" alignItems="center" columnGap="md" overflow="hidden">
-        <Box flexDirection="row" alignItems="center" columnGap="xs" paddingX={1} backgroundColor="claude" flexShrink={1}>
-          {drawIcon('branch')}
-          <Text color={PILL_TEXT} bold weight="bold" wrap="truncate-end">
-            {git.branch}
-          </Text>
-        </Box>
-        {sync.map(drawChip)}
-        <Box
-          flexDirection="row"
-          alignItems="center"
-          columnGap="xs"
-          paddingX={1}
-          backgroundColor={isLinked ? 'merged' : 'permission'}
-          flexShrink={1}
-        >
-          {drawIcon('worktree')}
-          <Text color={PILL_TEXT} bold weight="bold" wrap="truncate-end">
-            {git.worktree ?? git.repo}
-          </Text>
-          <Text color={PILL_TEXT} wrap="truncate-end">
-            {isLinked ? `worktree of ${git.repo}` : 'main checkout'}
-          </Text>
-        </Box>
-        {changes.map(drawChip)}
-        {(git.insertions > 0 || git.deletions > 0) && (
-          <Box flexDirection="row" columnGap="xs" flexShrink={0}>
-            <Text color="success" bold weight="bold" tabular>
-              +{git.insertions}
-            </Text>
-            <Text color="error" bold weight="bold" tabular>
-              −{git.deletions}
-            </Text>
-          </Box>
-        )}
+      <Box flexDirection="column" rowGap="xs">
+        {band}
+        {survey}
       </Box>
     )
   })
