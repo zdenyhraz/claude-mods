@@ -10,13 +10,17 @@ Mods need Claude Code 2.1.287 or later.
 
 ## git-band
 
-While subagents run:
+While the session works, with subagents running:
 
-![git-band with five subagent cards: running, running, waiting, done and failed](plugins/git-band/docs/dashboard-agents.png)
+![git-band while it runs tests: the state chip, goal and plan step, what changed since the prompt, the git row with the plan limits, the context bar and five subagent cards](plugins/git-band/docs/dashboard-agents.png)
 
-With none:
+Waiting for you:
 
-![git-band with no subagents: the git row with the plan limits, and the context bar](plugins/git-band/docs/dashboard-idle.png)
+![git-band waiting for an answer: an amber chip with the question, then what changed since the prompt, the git row and the context bar](plugins/git-band/docs/dashboard-waiting.png)
+
+Five sessions, each in a worktree with a colour of its own:
+
+![Five git-band bands, one per worktree: editing, waiting for you, done, failed and stopped](plugins/git-band/docs/dashboard-sessions.png)
 
 Drawn by the mod's own code with sample data, in the desktop app's dark theme.
 
