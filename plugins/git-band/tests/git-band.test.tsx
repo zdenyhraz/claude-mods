@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { describe, drawAgents, drawContext, drawTop, groupsOf, sliceTones } from '../hooks/look'
+import { describe, drawAgents, drawContext, drawTop, groupsOf, shorten, sliceTones } from '../hooks/look'
 
 type TestEngine = Parameters<TestBody>[0]
 
@@ -55,8 +55,14 @@ function fakeGit(on: On, layout: string | null, porcelain: string, shortstat = '
   })
 }
 
-async function start($: TestEngine, on: On) {
+// Unless a test draws something beneath the plugin itself, the engine draws nothing there.
+async function start($: TestEngine, on: On, drawsBeneath = false) {
   const clock = mock.clock(on)
+
+  if (!drawsBeneath) {
+    on('ui.render', () => ({ type: 'Box', props: {}, children: [] }))
+  }
+
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('classic.FileChanged', () => ({}))
   await $.session.start({ cwd: 'C:/code/my-app', surface: 'desktop', isInteractive: true })
@@ -66,6 +72,22 @@ async function start($: TestEngine, on: On) {
 }
 
 type Drawing = { drawn: () => Promise<unknown> }
+
+type Drawn = { type?: unknown; props?: Record<string, unknown>; hover?: unknown; children?: unknown }
+
+function findElement(node: unknown, matches: (element: Drawn) => boolean): Drawn | undefined {
+  if (Array.isArray(node)) {
+    return node.map(child => findElement(child, matches)).find(Boolean)
+  }
+
+  if (node === null || typeof node !== 'object') {
+    return undefined
+  }
+
+  const element = node as Drawn
+
+  return matches(element) ? element : findElement(element.children, matches)
+}
 
 // The desktop band is an image per row, each alt naming what it draws; the terminal band is text.
 async function shown(ui: Drawing): Promise<string> {
@@ -130,7 +152,7 @@ test('outside a repository the band is left to the engine', async ($, on) => {
 
     return <Text>engine</Text>
   })
-  await start($, on)
+  await start($, on, true)
 
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
 
@@ -244,6 +266,30 @@ test('a git command that fails keeps the band as it last was', async ($, on) => 
   await ui.unmount()
 })
 
+test("another mod's band stays below this one, in one column of bands", async ($, on) => {
+  fakeGit(on, MAIN_LAYOUT, CLEAN)
+  on('ui.render', ($, e) => {
+    const { Box, Text } = $.ui.resolve(e)
+
+    return (
+      <Box key="bands" flexDirection="column">
+        <Box key="band:other" flexDirection="column">
+          <Text>other band</Text>
+        </Box>
+      </Box>
+    )
+  })
+  await start($, on, true)
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const root = (await ui.drawn()) as { props?: { key?: string }; children?: { props?: { key?: string } }[] }
+
+  expect(root.props?.key).toBe('bands')
+  expect(root.children?.map(child => child.props?.key)).toEqual(['band:git-band', 'band:other'])
+  expect(await ui.find({ type: 'Text', text: /other band/ })).toBeDefined()
+  await ui.unmount()
+})
+
 test('a survey shows below the band instead of hiding it', async ($, on) => {
   fakeGit(on, MAIN_LAYOUT, CLEAN)
   on('ui.render', ($, e) => {
@@ -251,7 +297,7 @@ test('a survey shows below the band instead of hiding it', async ($, on) => {
 
     return <Text>How is Claude doing?</Text>
   })
-  await start($, on)
+  await start($, on, true)
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...BAND, surface, props: { ...BAND.props, hasSurvey: true } })
@@ -315,7 +361,7 @@ test('the top row is one line, follows the theme and escapes names', () => {
   expect(describe(groupsOf(SMALL_REPO))).toBe('repo a<b>&c · branch main · changes ~1 +3 −1')
   expect(image.source).toContain('a&lt;b&gt;&amp;c')
   expect(image.source).toContain('@media (prefers-color-scheme: light)')
-  expect(image.source).not.toContain('<rect')
+  expect(image.source).not.toContain('<rect class=')
   expect(image.height).toBe(22)
 })
 
@@ -326,7 +372,7 @@ test('the context row and the agent cards are images of their own', () => {
   const cards = drawAgents([running], 720, 72_000)
 
   expect(context.source).toContain('42%')
-  expect(context.width).toBe(690)
+  expect(context.source).toContain('<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="30">')
   expect(context.height).toBe(4 + 22 + 4)
   expect(cards.source).toContain('Explore auth flow')
   expect(cards.source).toContain('1m 12s')
@@ -334,7 +380,7 @@ test('the context row and the agent cards are images of their own', () => {
   expect(cards.height).toBe(8 + 56)
 })
 
-test('a narrower band keeps the text size: the bar shrinks, the branch shortens and cards wrap', () => {
+test('every image fills the band at any width, never scaled: the bar is a share of it and cards wrap', () => {
   const usage = {
     tokens: 84_000,
     window: 200_000,
@@ -343,19 +389,27 @@ test('a narrower band keeps the text size: the bar shrinks, the branch shortens 
     limits: [{ kind: 'five_hour', percent: 31 }, { kind: 'seven_day', percent: 18 }],
   }
   const agents = ['a', 'b', 'c', 'd', 'e'].map(id => ({ id, name: `Task ${id}`, type: 'Explore', status: 'running', startedAt: 0, tools: 1 }))
-  const git = { ...SMALL_REPO, repo: 'my-app', branch: 'zdenyhraz/long-feature-branch' }
-  const board = { git, usage, agents, now: 0 }
-  const barWidth = (source: string): number => Number(/<rect class="f-free" x="21" y="[\d.]+" width="([\d.]+)"/.exec(source)?.[1])
-  const fontSizes = (source: string): string[] => source.match(/font-size:[\d.]+px/g) ?? []
+  const board = { git: { ...SMALL_REPO, repo: 'my-app' }, usage, agents, now: 0 }
 
-  expect(drawTop(board, 900).width).toBe(900)
-  expect(drawTop(board, 420).width).toBe(420)
-  expect(fontSizes(drawTop(board, 420).source)).toEqual(fontSizes(drawTop(board, 900).source))
-  expect(barWidth(drawContext(usage, 420).source)).toBeLessThan(barWidth(drawContext(usage, 900).source) - 400)
-  expect(drawTop(board, 900).source).toContain('long-feature-branch')
-  expect(drawTop(board, 420).source).not.toContain('long-feature-branch')
+  for (const image of [drawTop(board, 900), drawContext(usage, 900), drawAgents(agents, 900, 0)]) {
+    expect(image.source).toMatch(/^<svg xmlns="http:\/\/www.w3.org\/2000\/svg" width="100%" height="\d+">/)
+    expect(image.source).not.toContain('viewBox')
+  }
+
+  expect(drawTop(board, 420).source.match(/font-size:[\d.]+px/g)).toEqual(drawTop(board, 900).source.match(/font-size:[\d.]+px/g))
+  expect(drawContext(usage, 900).source).toContain('width:max(0px, calc(100% - ')
+  expect(drawContext(usage, 900).source).toContain('<svg x="100%"')
   expect(drawAgents(agents, 900, 0).height).toBe(8 + 56)
   expect(drawAgents(agents, 420, 0).height).toBe(8 + 56 + 6 + 56)
+  expect(drawAgents(agents, 900, 0).source).toContain('<svg x="80.000%" y="8" width="20.000%" height="56">')
+})
+
+test('a long branch is cut in the middle, keeping both ends', () => {
+  const cut = shorten('zdenyhraz/camera-da-structure-caf29d', 16)
+
+  expect(cut).toBe('zdenyhra…-caf29d')
+  expect([...cut].length).toBe(16)
+  expect(shorten('main', 16)).toBe('main')
 })
 
 function fakeUsage(on: On) {
@@ -445,17 +499,17 @@ test('each plan limit is a ring with its window named inside and its percentage 
   expect(image.source).not.toContain('>week</text>')
 })
 
-test('the yellow compact control beside the context row compacts the conversation', async ($, on) => {
-  let compactions = 0
+test('the yellow compact control beside the context row runs /compact', async ($, on) => {
+  const runs: string[] = []
   fakeGit(on, MAIN_LAYOUT, CLEAN)
   fakeUsage(on)
-  on('session.compact', () => {
-    compactions += 1
+  on('command.run', (_, e) => {
+    runs.push(e.command)
 
-    return { messages: [{ role: 'user', text: 'summary', toolUses: [] }] } as never
+    return { text: '' }
   })
   on('ui.toast', () => ({ value: undefined }) as never)
-  await start($, on)
+  const clock = await start($, on)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
 
   expect(await ui.find({ type: 'Client', key: 'compact' })).toBeDefined()
@@ -467,22 +521,27 @@ test('the yellow compact control beside the context row compacts the conversatio
 
   await ui.pointer({ type: 'down', button: 'left', x: 1, y: 0, in: 'compact' })
   await ui.pointer({ type: 'up', button: 'left', x: 1, y: 0, in: 'compact' })
-  expect(compactions).toBe(1)
+  await clock.advance(10)
+  expect(runs).toEqual(['compact'])
 
   await ui.pointer({ type: 'leave', x: 4, y: 0, in: 'compact' })
   expect((await ui.find({ type: 'Text', text: /compact/, in: 'compact' }))?.props.inverse).toBe(false)
   await ui.unmount()
 })
 
-test('a click while a turn runs compacts once the turn ends', async ($, on) => {
-  let compactions = 0
+test('a click while a turn runs shows the compaction queued until the turn ends', async ($, on) => {
+  const runs: string[] = []
   const toasts: string[] = []
+  let finish = (): void => undefined
   fakeGit(on, MAIN_LAYOUT, CLEAN)
   fakeUsage(on)
-  on('session.compact', () => {
-    compactions += 1
+  // The engine holds a command run mid-turn until the session is idle.
+  on('command.run', (_, e) => {
+    runs.push(e.command)
 
-    return { messages: [{ role: 'user', text: 'summary', toolUses: [] }] } as never
+    return new Promise(resolve => {
+      finish = () => resolve({ text: '' })
+    })
   })
   on('ui.toast', (_, e) => {
     toasts.push(String((e as { text?: unknown }).text ?? e))
@@ -496,11 +555,110 @@ test('a click while a turn runs compacts once the turn ends', async ($, on) => {
 
   await $.turn.start({ text: 'work', turnId: 't1' })
   await ui.post({ action: 'compact' }, { in: 'compact' })
-  expect(compactions).toBe(0)
+  await clock.advance(10)
+  expect(runs).toEqual(['compact'])
   expect(toasts.join(' ')).toContain('when this turn ends')
+  expect((await ui.find({ type: 'Text', text: /compact/, in: 'compact' }))?.props.dimColor).toBe(true)
+
+  await ui.post({ action: 'compact' }, { in: 'compact' })
+  await clock.advance(10)
+  expect(runs).toEqual(['compact'])
 
   await $.turn.complete({ turnId: 't1', answer: 'done', durationMs: 1000, isAborted: false, reason: 'answer' } as never)
-  await clock.advance(500)
-  expect(compactions).toBe(1)
+  await clock.settle()
+  expect(await ui.find({ type: 'Text', text: /compact/, in: 'compact' })).toBeUndefined()
+
+  finish()
+  await clock.settle()
+  expect((await ui.find({ type: 'Text', text: /compact/, in: 'compact' }))?.props.dimColor).toBe(false)
   await ui.unmount()
+})
+
+test('hovering the git row shows its names whole, the upstream and the changes in words', async ($, on) => {
+  const long = DIRTY.replace('# branch.head feature-x', '# branch.head zdenyhraz/camera-da-structure-caf29d-and-then-some-more')
+  fakeGit(on, WORKTREE_LAYOUT, long, ' 6 files changed, 120 insertions(+), 8 deletions(-)\n')
+  await start($, on)
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const card = findElement(await ui.drawn(), element => element.type === 'Box' && element.props?.position === 'absolute')
+  const has = async (whole: string) => (await ui.find({ type: 'Text', text: new RegExp(`^${whole.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}$`) })) !== undefined
+
+  expect(card?.props?.display).toBe('none')
+  expect(card?.hover).toEqual({ display: 'flex' })
+
+  for (const whole of ['zdenyhraz/camera-da-structure-caf29d-and-then-some-more', 'worktree feature-x', 'origin/feature-x', '2 ahead', '1 behind', '2 modified', '2 untracked', '+120 −8 lines']) {
+    expect(await has(whole)).toBe(true)
+  }
+
+  expect(await shown(ui)).toContain('branch zdenyhraz/camera-da-…-and-then-some-more ')
+  await ui.unmount()
+})
+
+type Layout = { shapes: number[]; limits: string[]; room: number }
+
+// What the top row's media queries show at a band width: the git shapes, the limits' form and the git row's room.
+function layoutAt(source: string, width: number): Layout {
+  const layout: Layout = { shapes: [], limits: [], room: width }
+
+  for (const block of source.matchAll(/@media ([^{]+)\{((?:[^{}]*\{[^{}]*\})*)\}/g)) {
+    const min = Number(/min-width:([\d.]+)px/.exec(block[1] ?? '')?.[1] ?? 0)
+    const max = Number(/max-width:([\d.]+)px/.exec(block[1] ?? '')?.[1] ?? Infinity)
+
+    if (width < min || width > max) {
+      continue
+    }
+
+    const rules = block[2] ?? ''
+    layout.shapes.push(...[...rules.matchAll(/\.v(\d+)\{display:inline\}/g)].map(match => Number(match[1])))
+    layout.limits.push(...[...rules.matchAll(/\.(l[pr])\{display:inline\}/g)].map(match => match[1] ?? ''))
+    const reserve = /#git-room\{width:calc\(100% - ([\d.]+)px\)\}/.exec(rules)?.[1]
+
+    if (reserve !== undefined) {
+      layout.room = width - Number(reserve)
+    }
+  }
+
+  return layout
+}
+
+function shapeSource(source: string, shape: number): string {
+  return new RegExp(`<g class="v v${shape}"[^>]*>(.*?)</g>(?=<g class="v |</g>)`).exec(source)?.[1] ?? ''
+}
+
+test('at every band width one shape of the git row shows, and it never reaches the limits', () => {
+  const git = {
+    ...SMALL_REPO,
+    repo: 'my-app',
+    worktree: 'camera-da-structure-caf29d',
+    branch: 'zdenyhraz/camera-da-structure-caf29d',
+    ahead: 2,
+    behind: 1,
+    modified: 5,
+    untracked: 2,
+    staged: 1,
+    insertions: 176,
+    deletions: 12,
+  }
+  const usage = { tokens: 1, window: 200_000, percent: 0, slices: [], limits: [{ kind: 'five_hour', percent: 23 }, { kind: 'seven_day', percent: 7 }] }
+  const source = drawTop({ git, usage, agents: [], now: 0 }, 900).source
+  const ends = (piece: string): number[] =>
+    [...piece.matchAll(/<text class="strong f-[a-z]+" x="([\d.]+)" y="15" textLength="(\d+)"/g)].map(match => Number(match[1]) + Number(match[2]))
+
+  for (let width = 200; width <= 1200; width += 7) {
+    const layout = layoutAt(source, width)
+
+    expect(layout.shapes.length).toBe(1)
+    expect(layout.limits.length).toBe(width < 360 ? 0 : 1)
+
+    if (width >= 300) {
+      expect(Math.max(...ends(shapeSource(source, layout.shapes[0] ?? -1)))).toBeLessThanOrEqual(layout.room + 1)
+    }
+  }
+
+  expect(shapeSource(source, layoutAt(source, 1100).shapes[0] ?? -1)).toContain('>zdenyhraz/camera-da-structure-caf29d<')
+  expect(shapeSource(source, layoutAt(source, 520).shapes[0] ?? -1)).not.toContain('camera-da-structure-caf29d<')
+  expect(layoutAt(source, 460).limits).toEqual(['lp'])
+  expect(layoutAt(source, 380).limits).toEqual(['lr'])
+  expect(source).toContain('>23%</text>')
+  expect(source).toContain('>5h</text>')
 })

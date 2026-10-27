@@ -1,17 +1,17 @@
 import { atom, read, update } from 'claude-code'
-import type { Color, EngineInterface, ProcessRunResult, Register, SessionContextUsage, SessionRateLimit } from 'claude-code'
+import type { Color, EngineInterface, ProcessRunResult, Register, RenderElement, RenderNode, SessionContextUsage, SessionRateLimit } from 'claude-code'
 
 import type { AgentView, GitStatus, UsageView } from '../types'
 import { parseBranch, parseFiles, parseLayout, parseShortstat, repoName, worktreeName } from './git'
 import type { Layout } from './git'
-import { agentTime, describeAgents, describeContext, describeTop, drawAgents, drawContext, drawTop, groupsOf, isActive, kilo, limitName, limitTone, orderAgents, sliceTones, stateOf } from './look'
+import { agentTime, describeAgents, describeContext, describeTop, detailsOf, drawAgents, drawContext, drawTop, groupsOf, isActive, kilo, limitName, limitTone, orderAgents, sliceTones, stateOf } from './look'
 import type { CompactMode } from './compact-button'
 import type { Dashboard, Icon, Image, Tone } from './look'
 
 const SETTLE_MS = 300
 const TICK_MS = 5_000
-// The desktop lays the band out in cells; this is a cell's width in CSS pixels there, so the image can be drawn
-// at the band's own width rather than scaled into it.
+// An estimate of a cell's width in CSS pixels on the desktop. The images fill the band's real width whatever it
+// is; the estimate only decides how many agent cards go to a row, and what an image shows if its CSS is dropped.
 const PX_PER_COLUMN = 7.6
 const REFRESHING_TOOLS = /^(Bash|PowerShell|Edit|Write|NotebookEdit|EnterWorktree|ExitWorktree)$/
 
@@ -40,15 +40,14 @@ const THEME_KEYS: Record<Tone, Color> = {
 
 const GLYPHS: Partial<Record<Icon, string>> = { repo: '▤', worktree: '⑂', branch: '⎇' }
 
-// The compact control's cells beside the context row's image, and the room its image leaves for it.
+// The compact control's cells beside the context row's image.
 const COMPACT_COLUMNS = 9
-const BUTTON_PX = COMPACT_COLUMNS * PX_PER_COLUMN + 4
 
-// The band redraws for reasons of the app's own (a turn starting, a resize); an image is rebuilt only when what it shows changed.
+// The band redraws for reasons of the app's own (a turn starting, a resize); an image is rebuilt only when what it
+// shows changed. A resize alone keeps the git and context images, which lay themselves out at the new width.
 const cache = new Map<string, { key: string; image: Image }>()
 
-function cachedImage(row: string, alt: string, room: number, draw: () => Image): Image {
-  const key = `${Math.floor(room)} ${alt}`
+function cachedImage(row: string, key: string, draw: () => Image): Image {
   const hit = cache.get(row)
 
   if (hit?.key === key) {
@@ -69,29 +68,25 @@ function setCompactMode($: EngineInterface, mode: CompactMode): void {
   $.ui.invalidate('ui.render')
 }
 
-// The engine refuses to compact while a turn runs, so a click then waits for the turn to end.
-async function compactNow($: EngineInterface): Promise<void> {
-  if (compactMode === 'compacting') {
+// Runs /compact as if typed, which the engine queues until the turn ends. From a timer, since a command started
+// inside the hook handling the click would wait on that hook.
+function compactNow($: EngineInterface): void {
+  if (compactMode !== 'ready') {
     return
   }
+
+  setCompactMode($, isTurnRunning ? 'queued' : 'compacting')
 
   if (isTurnRunning) {
-    setCompactMode($, 'queued')
     $.ui.toast('Compacting when this turn ends')
-    return
   }
 
-  setCompactMode($, 'compacting')
-  $.ui.toast('Compacting the conversation…')
+  $.clock.after(1, () => void runCompact($))
+}
 
+async function runCompact($: EngineInterface): Promise<void> {
   try {
-    const result = await $.session.compact()
-
-    if ('skip' in result && result.skip !== undefined) {
-      $.ui.toast(`Not compacted: ${result.skip}`)
-      return
-    }
-
+    await $.command.run({ command: 'compact' })
     const now = await $.session.usage().catch(() => null)
 
     if (now) {
@@ -102,15 +97,6 @@ async function compactNow($: EngineInterface): Promise<void> {
   } finally {
     setCompactMode($, 'ready')
   }
-}
-
-function compactIfQueued($: EngineInterface): void {
-  if (compactMode !== 'queued') {
-    return
-  }
-
-  compactMode = 'ready'
-  $.clock.after(SETTLE_MS, () => void compactNow($))
 }
 
 async function git($: EngineInterface, args: string[]): Promise<ProcessRunResult | null> {
@@ -289,6 +275,37 @@ async function dropFinished($: EngineInterface): Promise<void> {
   await update($, agents, current => current.filter(isActive))
 }
 
+// Band mods share the band: each puts its own in a Box keyed `band:<name>`, inside one column keyed `bands` that
+// the next mod unpacks, so no band hides another. A survey or a mod that draws no column is one more item.
+const BANDS = 'bands'
+
+function bandsBelow(rest: RenderElement | null | undefined): RenderNode[] {
+  if (!rest || (rest.type === 'Box' && (rest.children ?? []).length === 0)) {
+    return []
+  }
+
+  if (rest.type !== 'Box' || rest.props?.key !== BANDS) {
+    return [rest]
+  }
+
+  // The engine stamps a hook's root with its owner; unpacked, that stamp belongs on the owner's own band.
+  const owner = rest.part?.plugin
+
+  return (rest.children ?? []).map(child =>
+    owner !== undefined && typeof child !== 'string' && child.type === 'Box' && child.props?.key === `band:${owner}` && child.part === undefined
+      ? { ...child, part: rest.part }
+      : child,
+  )
+}
+
+function stackBands(band: RenderNode, rest: RenderElement | null | undefined): RenderElement {
+  return {
+    type: 'Box',
+    props: { key: BANDS, flexDirection: 'column' },
+    children: [{ type: 'Box', props: { key: 'band:git-band', flexDirection: 'column' }, children: [band] }, ...bandsBelow(rest)],
+  }
+}
+
 export const register: Register = on => {
   // A reload keeps the values in $.state but not the band's drawing, which otherwise waits for the next prompt.
   on('session.start', async ($, e, next) => {
@@ -391,7 +408,10 @@ export const register: Register = on => {
       isTurnRunning = false
       isAwaitingPerson = true
       scheduleRefresh($)
-      compactIfQueued($)
+
+      if (compactMode === 'queued') {
+        setCompactMode($, 'compacting')
+      }
     }
 
     void syncAgents($)
@@ -404,7 +424,7 @@ export const register: Register = on => {
     const data = e.data as { action?: unknown } | null
 
     if (e.element === 'compact' && data?.action === 'compact') {
-      void compactNow($)
+      compactNow($)
     }
 
     return result
@@ -464,40 +484,48 @@ export const register: Register = on => {
       const { Svg } = $.ui.resolve(e)
       // The desktop alone draws a Client; elsewhere the context row goes without the control.
       const Client = e.surface === 'desktop' ? $.ui.resolve(e).Client : undefined
-      const room = e.props.bodyColumns * PX_PER_COLUMN
+      const guess = e.props.bodyColumns * PX_PER_COLUMN
       const topAlt = describeTop(board)
-      const top = cachedImage('top', topAlt, room, () => drawTop(board, room))
+      const top = cachedImage('top', topAlt, () => drawTop(board, guess))
       const usageNow = board.usage
       const contextAlt = usageNow ? describeContext(usageNow) : ''
-      const context = usageNow ? cachedImage('context', contextAlt, room - BUTTON_PX, () => drawContext(usageNow, room - BUTTON_PX)) : null
+      const context = usageNow ? cachedImage('context', contextAlt, () => drawContext(usageNow, guess - COMPACT_COLUMNS * PX_PER_COLUMN)) : null
       const agentsAlt = describeAgents(board.agents, board.now)
-      const cards = board.agents.length > 0 ? cachedImage('agents', agentsAlt, room, () => drawAgents(board.agents, room, board.now)) : null
+      const cards = board.agents.length > 0 ? cachedImage('agents', `${Math.floor(guess)} ${agentsAlt}`, () => drawAgents(board.agents, guess, board.now)) : null
+      const details = detailsOf(board.git)
+      const detailsWidth = Math.max(...details.map(line => line.reduce((sum, token) => sum + token.text.length + 3, 0)))
 
+      // An Svg given no width fills the column Box it is in, so each image is laid out at the band's real width.
       band = (
-        <Box flexDirection="column">
-          <Svg source={top.source} alt={topAlt} width={top.width} height={top.height} />
+        <Box flexDirection="column" width="100%">
+          <Box key="git" flexDirection="column" width="100%">
+            <Svg source={top.source} alt={topAlt} height={top.height} />
+            <Box position="absolute" top={0} left={0} width={Math.min(e.props.bodyColumns, detailsWidth)} display="none" hover={{ display: 'flex' }} flexDirection="column">
+              {details.map((line, index) => (
+                <Text wrap="truncate-end">
+                  {line.map((token, at) => [
+                    at > 0 ? <Text dimColor>{' · '}</Text> : '',
+                    <Text color={THEME_KEYS[token.tone]} bold={index === 0}>
+                      {token.text}
+                    </Text>,
+                  ])}
+                </Text>
+              ))}
+            </Box>
+          </Box>
           {context && (
-            <Box flexDirection="row" alignItems="center">
-              <Svg source={context.source} alt={contextAlt} width={context.width} height={context.height} />
+            <Box flexDirection="row" alignItems="center" width="100%">
+              <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
+                <Svg source={context.source} alt={contextAlt} height={context.height} />
+              </Box>
               {Client && <Client key="compact" module="./compact-button.tsx" props={{ mode: compactMode }} width={COMPACT_COLUMNS} height={1} />}
             </Box>
           )}
-          {cards && <Svg source={cards.source} alt={agentsAlt} width={cards.width} height={cards.height} />}
+          {cards && <Svg source={cards.source} alt={agentsAlt} height={cards.height} />}
         </Box>
       )
     }
 
-    if (!e.props.hasSurvey) {
-      return band
-    }
-
-    const survey = await next(e)
-
-    return (
-      <Box flexDirection="column" rowGap="xs">
-        {band}
-        {survey}
-      </Box>
-    )
+    return stackBands(band, await next(e))
   })
 }

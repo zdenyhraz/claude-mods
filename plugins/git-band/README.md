@@ -13,17 +13,29 @@ A session dashboard above the Claude Code prompt. Screenshots are in the [reposi
    - **Limits**: a small ring per plan window, `5h` and `wk` written inside, filling green under 50%, amber
      from 50% and red from 80%, with the percentage beside it. They appear after the session's first reply,
      on a Pro or Max plan.
+
+   On the desktop app, hovering the row shows a card with the names whole, the upstream with how far ahead
+   and behind it is, and each kind of change in words.
 2. **Context**: a bar of the context window, each category in its own colour, then the percentage used. On
-   the desktop app a yellow `compact` at the end of the row compacts the conversation, as `/compact` does.
+   the desktop app a yellow `compact` at the end of the row runs `/compact`; clicked during a turn, it runs
+   once the turn ends.
 3. **Subagents**, only while there are any: a card per agent with its state (running, waiting, queued,
    done, failed, stopped) in its own colour, its time, its task and type, and how many tools it has called.
    Active agents come first; finished ones stay until the next prompt. Ten cards at most, the last saying
    how many more.
 
-On the desktop app the dashboard is one small vector image, since the app gives a bordered box a full row
-above and below; the image keeps it compact and picks Claude Code's dark or light colours to match the
-app's theme. It is rebuilt only when what it shows changed. The terminal shows the same rows as coloured
-text. Names longer than 40 characters are shortened with an ellipsis.
+On the desktop app each row is a small vector image, since the app gives a bordered box a full row above
+and below; the images keep the dashboard compact and pick Claude Code's dark or light colours to match the
+app's theme. Each image is as wide as the band and is never scaled, so text keeps its size at any window
+width. Every form the git row and the limits can take is drawn into the image, and the image's own width
+picks the one that fits, so nothing overlaps: as the band narrows, long names are cut shorter, then the line
+counts go, then the change counts fold into one total, then the limits lose their percentages, then the
+limits go. An image is rebuilt only when what it shows changed. The terminal shows the same rows as
+coloured text.
+
+Long names are cut in the middle, keeping both ends: `zdenyhraz/camera-da-…-caf29d`.
+
+Other mods' bands stay: git-band stacks above whatever they draw in the band, and a survey shows below it.
 
 ## How it stays current
 
@@ -40,8 +52,7 @@ refreshes only when something that can change the answer happens.
   staging them.
 
 A burst of these is one refresh, and the band redraws only when the answer changed. Outside a git repository
-it draws nothing. When git can't answer (a timeout, a busy index), the band keeps what it last showed, and a
-survey in the band shows below it rather than in its place.
+it draws nothing. When git can't answer (a timeout, a busy index), the band keeps what it last showed.
 
 The band always describes the session's own directory. Subagents' tool calls and turns don't refresh it,
 since a subagent may work in a worktree of its own.

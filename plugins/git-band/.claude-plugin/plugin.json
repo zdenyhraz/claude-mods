@@ -1,6 +1,6 @@
 {
   "name": "git-band",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "A session dashboard above the prompt: git branch, worktree and changes, context usage, plan limits and subagents.",
   "author": { "name": "zdenyhraz", "url": "https://github.com/zdenyhraz" },
   "homepage": "https://github.com/zdenyhraz/claude-mods/tree/main/plugins/git-band",
