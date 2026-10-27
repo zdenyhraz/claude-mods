@@ -217,21 +217,22 @@ export function describe(groups: Group[]): string {
   return groups.map(group => `${group.key} ${group.tokens.map(token => token.text).join(' ')}`).join(' · ')
 }
 
+export function describeTop(board: Dashboard): string {
+  const limits = board.usage?.limits ?? []
+
+  return [describe(groupsOf(board.git)), ...limits.map(limit => `${limitName(limit.kind)} ${Math.round(limit.percent)}%`)].join(' · ')
+}
+
+export const describeContext = (usage: UsageView): string => `context ${usage.percent}%`
+
+export function describeAgents(agents: AgentView[], now: number): string {
+  return orderAgents(agents)
+    .map(agent => `agent ${stateOf(agent.status).word} ${agent.name} ${agentTime(agent, now)} ${agent.tools} tools`)
+    .join(' · ')
+}
+
 export function describeDashboard(board: Dashboard): string {
-  const parts = [describe(groupsOf(board.git))]
-
-  if (board.usage) {
-    parts.push(`context ${board.usage.percent}% ${kilo(board.usage.tokens)}/${kilo(board.usage.window)}`)
-    parts.push(...board.usage.limits.map(limit => `${limitName(limit.kind)} ${Math.round(limit.percent)}%`))
-  }
-
-  parts.push(
-    ...orderAgents(board.agents).map(
-      agent => `agent ${stateOf(agent.status).word} ${agent.name} ${agentTime(agent, board.now)} ${agent.tools} tools`,
-    ),
-  )
-
-  return parts.join(' · ')
+  return [describeTop(board), board.usage ? describeContext(board.usage) : '', describeAgents(board.agents, board.now)].filter(Boolean).join(' · ')
 }
 
 const MIN_WIDTH = 320
@@ -334,14 +335,31 @@ function drawGitRow(groups: Group[], parts: string[]): number {
   return x
 }
 
-const LIMIT_GAP = 7
-const LIMITS_GAP = 16
+const RING = 22
+const RING_STROKE = 2.6
+const RING_GAP = 5
+const LIMITS_GAP = 14
+
+// The ring says which window it is, so a short name fits inside it.
+const RING_LABELS: Record<string, string> = { five_hour: '5h', seven_day: 'wk', spend_limit: '$' }
+
+const ringLabel = (kind: string): string => RING_LABELS[kind] ?? limitName(kind).slice(0, 2)
 
 const limitsWidth = (limits: UsageView['limits']): number =>
-  limits.reduce(
-    (sum, limit) => sum + textWidth(limitName(limit.kind), SIZES.small) + LIMIT_GAP + textWidth(`${Math.round(limit.percent)}%`, SIZES.strong) + LIMITS_GAP,
-    0,
+  limits.reduce((sum, limit) => sum + RING + RING_GAP + textWidth(`${Math.round(limit.percent)}%`, SIZES.strong) + LIMITS_GAP, 0)
+
+function drawRing(kind: string, percent: number, x: number, parts: string[]): void {
+  const radius = (RING - RING_STROKE) / 2
+  const centre = RING / 2
+  const length = 2 * Math.PI * radius
+  const filled = (Math.min(100, Math.max(0, percent)) / 100) * length
+
+  parts.push(`<circle class="s-free" cx="${x + centre}" cy="${centre}" r="${radius}" fill="none" stroke-width="${RING_STROKE}"/>`)
+  parts.push(
+    `<circle class="s-${limitTone(percent)}" cx="${x + centre}" cy="${centre}" r="${radius}" fill="none" stroke-width="${RING_STROKE}" stroke-linecap="round" stroke-dasharray="${filled.toFixed(2)} ${length.toFixed(2)}" transform="rotate(-90 ${x + centre} ${centre})"/>`,
   )
+  parts.push(`<text class="ring f-gray" x="${x + centre}" y="${centre + 3}" text-anchor="middle">${escape(ringLabel(kind))}</text>`)
+}
 
 function drawLimits(limits: UsageView['limits'], right: number, parts: string[]): void {
   let x = right
@@ -349,18 +367,18 @@ function drawLimits(limits: UsageView['limits'], right: number, parts: string[])
   for (const limit of [...limits].reverse()) {
     const percent = `${Math.round(limit.percent)}%`
     parts.push(text(percent, x, 15, limitTone(limit.percent), 'strong', 'end'))
-    x -= textWidth(percent, SIZES.strong) + LIMIT_GAP
-    parts.push(text(limitName(limit.kind), x, 15, 'gray', 'small', 'end'))
-    x -= textWidth(limitName(limit.kind), SIZES.small) + LIMITS_GAP
+    x -= textWidth(percent, SIZES.strong) + RING_GAP + RING
+    drawRing(limit.kind, limit.percent, x, parts)
+    x -= LIMITS_GAP
   }
 }
 
 function drawContextRow(usage: UsageView, top: number, width: number, parts: string[]): void {
   const percent = `${usage.percent}%`
-  const amount = `${kilo(usage.tokens)}/${kilo(usage.window)}`
   const slices = usage.slices.length > 0 ? usage.slices : [{ name: 'Used', tokens: usage.tokens, color: 'autoAccept' }]
   const tones = sliceTones(slices)
-  const tail = textWidth(percent, SIZES.strong) + 6 + textWidth(amount, SIZES.meta)
+  // Room after the percentage, so whatever sits beside the image does not touch it.
+  const tail = textWidth(percent, SIZES.strong) + 12
   const barX = 21
   const barWidth = Math.max(MIN_BAR, width - barX - 10 - tail)
   const barY = top + 7.5
@@ -379,8 +397,6 @@ function drawContextRow(usage: UsageView, top: number, width: number, parts: str
   parts.push('</g>')
   x = barX + barWidth + 10
   parts.push(text(percent, x, top + 15, limitTone(usage.percent), 'strong'))
-  x += textWidth(percent, SIZES.strong) + 6
-  parts.push(text(amount, x, top + 15, 'gray', 'meta'))
 }
 
 function drawCard(agent: AgentView, x: number, y: number, width: number, now: number, parts: string[]): void {
@@ -440,30 +456,18 @@ function fitGitRow(groups: Group[], room: number): Group[] {
   })
 }
 
-// `room` is the band's width in CSS pixels: the image is drawn at exactly that width, so the app never scales it
-// and text keeps its size; the context bar, the branch name and the number of cards to a row give way instead.
-export function drawDashboard(board: Dashboard, room: number): { source: string; width: number; height: number } {
-  const parts: string[] = []
+export type Image = { source: string; width: number; height: number }
+
+const CONTEXT_TOP = 4
+const CARDS_TOP = 8
+
+function wrap(parts: string[], room: number, height: number): Image {
   const width = Math.max(MIN_WIDTH, Math.floor(room))
-  const limits = board.usage?.limits ?? []
-  let height = ROW
-
-  drawGitRow(fitGitRow(groupsOf(board.git), width - limitsWidth(limits) - 8), parts)
-  drawLimits(limits, width, parts)
-
-  if (board.usage) {
-    drawContextRow(board.usage, height + 4, width, parts)
-    height += 4 + ROW
-  }
-
-  if (board.agents.length > 0) {
-    height = drawCards(orderAgents(board.agents), height + 8, width, board.now, parts)
-  }
-
   const font = "font-family:'Segoe UI Variable Text','Segoe UI',system-ui,-apple-system,sans-serif"
   const style =
     `.strong{${font};font-size:${SIZES.strong}px;font-weight:600}.name{${font};font-size:${SIZES.name}px;font-weight:500}` +
     `.small{${font};font-size:${SIZES.small}px;font-weight:600}.meta{${font};font-size:${SIZES.meta}px;font-weight:400}` +
+    `.ring{${font};font-size:8px;font-weight:700}` +
     `${palette(DARK)}@media (prefers-color-scheme: light){${palette(LIGHT)}}`
   const h = Math.ceil(height)
 
@@ -474,3 +478,33 @@ export function drawDashboard(board: Dashboard, room: number): { source: string;
   }
 }
 
+// Each row is its own image, drawn at exactly the room it is given in CSS pixels, so the app never scales one and
+// text keeps its size; the context bar, the branch name and the number of cards to a row give way instead.
+export function drawTop(board: Dashboard, room: number): Image {
+  const parts: string[] = []
+  const width = Math.max(MIN_WIDTH, Math.floor(room))
+  const limits = board.usage?.limits ?? []
+
+  drawGitRow(fitGitRow(groupsOf(board.git), width - limitsWidth(limits) - 8), parts)
+  drawLimits(limits, width, parts)
+
+  return wrap(parts, width, ROW)
+}
+
+export function drawContext(usage: UsageView, room: number): Image {
+  const parts: string[] = []
+  const width = Math.max(MIN_WIDTH, Math.floor(room))
+
+  drawContextRow(usage, CONTEXT_TOP, width, parts)
+
+  // As much room below as above, so the row's text sits at the image's middle, where a neighbour centred on it lines up.
+  return wrap(parts, width, CONTEXT_TOP + ROW + CONTEXT_TOP)
+}
+
+export function drawAgents(agents: AgentView[], room: number, now: number): Image {
+  const parts: string[] = []
+  const width = Math.max(MIN_WIDTH, Math.floor(room))
+  const bottom = drawCards(orderAgents(agents), CARDS_TOP, width, now, parts)
+
+  return wrap(parts, width, bottom)
+}

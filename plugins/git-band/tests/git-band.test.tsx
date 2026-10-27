@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { describe, drawDashboard, groupsOf, sliceTones } from '../hooks/look'
+import { describe, drawAgents, drawContext, drawTop, groupsOf, sliceTones } from '../hooks/look'
 
 type TestEngine = Parameters<TestBody>[0]
 
@@ -65,13 +65,31 @@ async function start($: TestEngine, on: On) {
   return clock
 }
 
-type Drawing = { find: (query: { type: 'Svg' | 'Box' }) => Promise<{ text: string; props: Record<string, unknown> } | undefined> }
+type Drawing = { drawn: () => Promise<unknown> }
 
-// The desktop band is one image whose alt names every part; the terminal band is text.
+// The desktop band is an image per row, each alt naming what it draws; the terminal band is text.
 async function shown(ui: Drawing): Promise<string> {
-  const image = await ui.find({ type: 'Svg' })
+  const alts: string[] = []
+  const texts: string[] = []
+  const walk = (node: unknown): void => {
+    if (typeof node === 'string') {
+      texts.push(node)
+    } else if (Array.isArray(node)) {
+      node.forEach(walk)
+    } else if (node !== null && typeof node === 'object') {
+      const element = node as { type?: unknown; props?: Record<string, unknown>; children?: unknown }
 
-  return image ? String(image.props.alt) : ((await ui.find({ type: 'Box' }))?.text ?? '')
+      if (element.type === 'Svg' && typeof element.props?.alt === 'string') {
+        alts.push(element.props.alt)
+      }
+
+      walk(element.children)
+    }
+  }
+
+  walk(await ui.drawn())
+
+  return alts.length > 0 ? alts.join(' · ') : texts.join('')
 }
 
 test('a linked worktree with changes shows its branch, worktree and counts, on terminal and desktop', async ($, on) => {
@@ -291,8 +309,8 @@ const SMALL_REPO = {
   deletions: 1,
 }
 
-test('the desktop image is one line without usage or agents, follows the theme and escapes names', () => {
-  const image = drawDashboard({ git: SMALL_REPO, usage: null, agents: [], now: 0 }, 720)
+test('the top row is one line, follows the theme and escapes names', () => {
+  const image = drawTop({ git: SMALL_REPO, usage: null, agents: [], now: 0 }, 720)
 
   expect(describe(groupsOf(SMALL_REPO))).toBe('repo a<b>&c · branch main · changes ~1 +3 −1')
   expect(image.source).toContain('a&lt;b&gt;&amp;c')
@@ -301,16 +319,19 @@ test('the desktop image is one line without usage or agents, follows the theme a
   expect(image.height).toBe(22)
 })
 
-test('the desktop image grows a context row and a row of agent cards', () => {
+test('the context row and the agent cards are images of their own', () => {
   const usage = { tokens: 84_000, window: 200_000, percent: 42, slices: [{ name: 'Messages', tokens: 53_400, color: 'autoAccept' }], limits: [] }
   const running = { id: 'a1', name: 'Explore auth flow', type: 'Explore', status: 'running', startedAt: 0, tools: 14 }
-  const image = drawDashboard({ git: SMALL_REPO, usage, agents: [running], now: 72_000 }, 720)
+  const context = drawContext(usage, 690)
+  const cards = drawAgents([running], 720, 72_000)
 
-  expect(image.source).toContain('Explore auth flow')
-  expect(image.source).toContain('1m 12s')
-  expect(image.source).toContain('class="s-sky"')
-  expect(image.source).toContain('42%')
-  expect(image.height).toBe(22 + 4 + 22 + 8 + 56)
+  expect(context.source).toContain('42%')
+  expect(context.width).toBe(690)
+  expect(context.height).toBe(4 + 22 + 4)
+  expect(cards.source).toContain('Explore auth flow')
+  expect(cards.source).toContain('1m 12s')
+  expect(cards.source).toContain('class="s-sky"')
+  expect(cards.height).toBe(8 + 56)
 })
 
 test('a narrower band keeps the text size: the bar shrinks, the branch shortens and cards wrap', () => {
@@ -323,19 +344,18 @@ test('a narrower band keeps the text size: the bar shrinks, the branch shortens 
   }
   const agents = ['a', 'b', 'c', 'd', 'e'].map(id => ({ id, name: `Task ${id}`, type: 'Explore', status: 'running', startedAt: 0, tools: 1 }))
   const git = { ...SMALL_REPO, repo: 'my-app', branch: 'zdenyhraz/long-feature-branch' }
-  const wide = drawDashboard({ git, usage, agents, now: 0 }, 900)
-  const narrow = drawDashboard({ git, usage, agents, now: 0 }, 420)
+  const board = { git, usage, agents, now: 0 }
   const barWidth = (source: string): number => Number(/<rect class="f-free" x="21" y="[\d.]+" width="([\d.]+)"/.exec(source)?.[1])
   const fontSizes = (source: string): string[] => source.match(/font-size:[\d.]+px/g) ?? []
 
-  expect(wide.width).toBe(900)
-  expect(narrow.width).toBe(420)
-  expect(fontSizes(narrow.source)).toEqual(fontSizes(wide.source))
-  expect(barWidth(narrow.source)).toBeLessThan(barWidth(wide.source) - 400)
-  expect(wide.source).toContain('long-feature-branch')
-  expect(narrow.source).not.toContain('long-feature-branch')
-  expect(wide.height).toBe(22 + 4 + 22 + 8 + 56)
-  expect(narrow.height).toBe(22 + 4 + 22 + 8 + 56 + 6 + 56)
+  expect(drawTop(board, 900).width).toBe(900)
+  expect(drawTop(board, 420).width).toBe(420)
+  expect(fontSizes(drawTop(board, 420).source)).toEqual(fontSizes(drawTop(board, 900).source))
+  expect(barWidth(drawContext(usage, 420).source)).toBeLessThan(barWidth(drawContext(usage, 900).source) - 400)
+  expect(drawTop(board, 900).source).toContain('long-feature-branch')
+  expect(drawTop(board, 420).source).not.toContain('long-feature-branch')
+  expect(drawAgents(agents, 900, 0).height).toBe(8 + 56)
+  expect(drawAgents(agents, 420, 0).height).toBe(8 + 56 + 6 + 56)
 })
 
 function fakeUsage(on: On) {
@@ -367,7 +387,7 @@ test('context and the session and weekly limits come from each measurement', asy
   } as never)
   await clock.settle()
 
-  expect(await shown(ui)).toBe('repo my-app · branch main · changes ✓ clean · context 42% 84k/200k · 5h 31% · week 18%')
+  expect(await shown(ui)).toBe('repo my-app · branch main · changes ✓ clean · 5h 31% · week 18% · context 42%')
   await ui.unmount()
 })
 
@@ -411,4 +431,76 @@ test('every context slice gets a hue of its own, even where /context gives greys
   expect(new Set(tones).size).toBe(4)
   expect(tones).not.toContain('gray')
   expect(tones[2]).toBe('warning')
+})
+
+test('each plan limit is a ring with its window named inside and its percentage beside it', () => {
+  const usage = { tokens: 1, window: 200_000, percent: 0, slices: [], limits: [{ kind: 'five_hour', percent: 72 }, { kind: 'seven_day', percent: 5 }] }
+  const image = drawTop({ git: SMALL_REPO, usage, agents: [], now: 0 }, 720)
+
+  expect(image.source).toContain('>5h</text>')
+  expect(image.source).toContain('>wk</text>')
+  expect(image.source).toMatch(/<circle class="s-warning"[^>]*stroke-dasharray/)
+  expect(image.source).toMatch(/<circle class="s-success"[^>]*stroke-dasharray/)
+  expect(image.source).toContain('>72%</text>')
+  expect(image.source).not.toContain('>week</text>')
+})
+
+test('the yellow compact control beside the context row compacts the conversation', async ($, on) => {
+  let compactions = 0
+  fakeGit(on, MAIN_LAYOUT, CLEAN)
+  fakeUsage(on)
+  on('session.compact', () => {
+    compactions += 1
+
+    return { messages: [{ role: 'user', text: 'summary', toolUses: [] }] } as never
+  })
+  on('ui.toast', () => ({ value: undefined }) as never)
+  await start($, on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  expect(await ui.find({ type: 'Client', key: 'compact' })).toBeDefined()
+  expect((await ui.find({ type: 'Text', text: /compact/, in: 'compact' }))?.props.color).toBe('warning')
+  expect((await ui.find({ type: 'Text', text: /compact/, in: 'compact' }))?.props.inverse).toBe(false)
+
+  await ui.pointer({ type: 'enter', x: 1, y: 0, in: 'compact' })
+  expect((await ui.find({ type: 'Text', text: /compact/, in: 'compact' }))?.props.inverse).toBe(true)
+
+  await ui.pointer({ type: 'down', button: 'left', x: 1, y: 0, in: 'compact' })
+  await ui.pointer({ type: 'up', button: 'left', x: 1, y: 0, in: 'compact' })
+  expect(compactions).toBe(1)
+
+  await ui.pointer({ type: 'leave', x: 4, y: 0, in: 'compact' })
+  expect((await ui.find({ type: 'Text', text: /compact/, in: 'compact' }))?.props.inverse).toBe(false)
+  await ui.unmount()
+})
+
+test('a click while a turn runs compacts once the turn ends', async ($, on) => {
+  let compactions = 0
+  const toasts: string[] = []
+  fakeGit(on, MAIN_LAYOUT, CLEAN)
+  fakeUsage(on)
+  on('session.compact', () => {
+    compactions += 1
+
+    return { messages: [{ role: 'user', text: 'summary', toolUses: [] }] } as never
+  })
+  on('ui.toast', (_, e) => {
+    toasts.push(String((e as { text?: unknown }).text ?? e))
+
+    return { value: undefined } as never
+  })
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '', reason: 'answer' }) as never)
+  const clock = await start($, on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  await $.turn.start({ text: 'work', turnId: 't1' })
+  await ui.post({ action: 'compact' }, { in: 'compact' })
+  expect(compactions).toBe(0)
+  expect(toasts.join(' ')).toContain('when this turn ends')
+
+  await $.turn.complete({ turnId: 't1', answer: 'done', durationMs: 1000, isAborted: false, reason: 'answer' } as never)
+  await clock.advance(500)
+  expect(compactions).toBe(1)
+  await ui.unmount()
 })

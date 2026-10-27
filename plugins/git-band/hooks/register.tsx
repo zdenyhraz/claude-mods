@@ -4,8 +4,9 @@ import type { Color, EngineInterface, ProcessRunResult, Register, SessionContext
 import type { AgentView, GitStatus, UsageView } from '../types'
 import { parseBranch, parseFiles, parseLayout, parseShortstat, repoName, worktreeName } from './git'
 import type { Layout } from './git'
-import { agentTime, describeDashboard, drawDashboard, groupsOf, isActive, kilo, limitName, limitTone, orderAgents, sliceTones, stateOf } from './look'
-import type { Dashboard, Icon, Tone } from './look'
+import { agentTime, describeAgents, describeContext, describeTop, drawAgents, drawContext, drawTop, groupsOf, isActive, kilo, limitName, limitTone, orderAgents, sliceTones, stateOf } from './look'
+import type { CompactMode } from './compact-button'
+import type { Dashboard, Icon, Image, Tone } from './look'
 
 const SETTLE_MS = 300
 const TICK_MS = 5_000
@@ -39,18 +40,77 @@ const THEME_KEYS: Record<Tone, Color> = {
 
 const GLYPHS: Partial<Record<Icon, string>> = { repo: '▤', worktree: '⑂', branch: '⎇' }
 
-// The band redraws for reasons of the app's own (a turn starting, a resize); the image is rebuilt only when what it shows changed.
-let cached: { key: string; image: ReturnType<typeof drawDashboard> } | null = null
+// The compact control's cells beside the context row's image, and the room its image leaves for it.
+const COMPACT_COLUMNS = 9
+const BUTTON_PX = COMPACT_COLUMNS * PX_PER_COLUMN + 4
 
-function cachedDashboard(board: Dashboard, columns: number): { image: ReturnType<typeof drawDashboard>; alt: string } {
-  const alt = describeDashboard(board)
-  const key = `${columns} ${alt}`
+// The band redraws for reasons of the app's own (a turn starting, a resize); an image is rebuilt only when what it shows changed.
+const cache = new Map<string, { key: string; image: Image }>()
 
-  if (cached?.key !== key) {
-    cached = { key, image: drawDashboard(board, columns * PX_PER_COLUMN) }
+function cachedImage(row: string, alt: string, room: number, draw: () => Image): Image {
+  const key = `${Math.floor(room)} ${alt}`
+  const hit = cache.get(row)
+
+  if (hit?.key === key) {
+    return hit.image
   }
 
-  return { image: cached.image, alt }
+  const image = draw()
+  cache.set(row, { key, image })
+
+  return image
+}
+
+let compactMode: CompactMode = 'ready'
+let isTurnRunning = false
+
+function setCompactMode($: EngineInterface, mode: CompactMode): void {
+  compactMode = mode
+  $.ui.invalidate('ui.render')
+}
+
+// The engine refuses to compact while a turn runs, so a click then waits for the turn to end.
+async function compactNow($: EngineInterface): Promise<void> {
+  if (compactMode === 'compacting') {
+    return
+  }
+
+  if (isTurnRunning) {
+    setCompactMode($, 'queued')
+    $.ui.toast('Compacting when this turn ends')
+    return
+  }
+
+  setCompactMode($, 'compacting')
+  $.ui.toast('Compacting the conversation…')
+
+  try {
+    const result = await $.session.compact()
+
+    if ('skip' in result && result.skip !== undefined) {
+      $.ui.toast(`Not compacted: ${result.skip}`)
+      return
+    }
+
+    const now = await $.session.usage().catch(() => null)
+
+    if (now) {
+      await recordUsage($, now.context, now.rateLimits)
+    }
+  } catch (error) {
+    $.ui.toast(`Compaction failed: ${error instanceof Error ? error.message : String(error)}`)
+  } finally {
+    setCompactMode($, 'ready')
+  }
+}
+
+function compactIfQueued($: EngineInterface): void {
+  if (compactMode !== 'queued') {
+    return
+  }
+
+  compactMode = 'ready'
+  $.clock.after(SETTLE_MS, () => void compactNow($))
 }
 
 async function git($: EngineInterface, args: string[]): Promise<ProcessRunResult | null> {
@@ -316,15 +376,36 @@ export const register: Register = on => {
     return result
   }).catch(($, e, next) => next(e))
 
+  on('turn.start', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      isTurnRunning = true
+    }
+
+    return next(e)
+  })
+
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
 
     if (e.agentId === undefined) {
+      isTurnRunning = false
       isAwaitingPerson = true
       scheduleRefresh($)
+      compactIfQueued($)
     }
 
     void syncAgents($)
+
+    return result
+  })
+
+  on('ui.message', async ($, e, next) => {
+    const result = await next(e)
+    const data = e.data as { action?: unknown } | null
+
+    if (e.element === 'compact' && data?.action === 'compact') {
+      void compactNow($)
+    }
 
     return result
   })
@@ -367,7 +448,6 @@ export const register: Register = on => {
           {board.usage && (
             <Box flexDirection="row" columnGap="sm" overflow="hidden">
               {word(`context ${board.usage.percent}%`, limitTone(board.usage.percent))}
-              {word(`${kilo(board.usage.tokens)}/${kilo(board.usage.window)}`, 'gray')}
               {board.usage.slices.map((slice, index) => word(`${slice.name} ${kilo(slice.tokens)}`, sliceTones(board.usage?.slices ?? [])[index] ?? 'gray'))}
             </Box>
           )}
@@ -382,10 +462,27 @@ export const register: Register = on => {
       )
     } else {
       const { Svg } = $.ui.resolve(e)
-      const { image, alt } = cachedDashboard(board, e.props.bodyColumns)
+      // The desktop alone draws a Client; elsewhere the context row goes without the control.
+      const Client = e.surface === 'desktop' ? $.ui.resolve(e).Client : undefined
+      const room = e.props.bodyColumns * PX_PER_COLUMN
+      const topAlt = describeTop(board)
+      const top = cachedImage('top', topAlt, room, () => drawTop(board, room))
+      const usageNow = board.usage
+      const contextAlt = usageNow ? describeContext(usageNow) : ''
+      const context = usageNow ? cachedImage('context', contextAlt, room - BUTTON_PX, () => drawContext(usageNow, room - BUTTON_PX)) : null
+      const agentsAlt = describeAgents(board.agents, board.now)
+      const cards = board.agents.length > 0 ? cachedImage('agents', agentsAlt, room, () => drawAgents(board.agents, room, board.now)) : null
+
       band = (
-        <Box flexDirection="row">
-          <Svg source={image.source} alt={alt} width={image.width} height={image.height} />
+        <Box flexDirection="column">
+          <Svg source={top.source} alt={topAlt} width={top.width} height={top.height} />
+          {context && (
+            <Box flexDirection="row" alignItems="center">
+              <Svg source={context.source} alt={contextAlt} width={context.width} height={context.height} />
+              {Client && <Client key="compact" module="./compact-button.tsx" props={{ mode: compactMode }} width={COMPACT_COLUMNS} height={1} />}
+            </Box>
+          )}
+          {cards && <Svg source={cards.source} alt={agentsAlt} width={cards.width} height={cards.height} />}
         </Box>
       )
     }

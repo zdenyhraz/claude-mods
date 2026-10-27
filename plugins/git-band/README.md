@@ -16,10 +16,11 @@ The images are the design mockups the dashboard was built from, in the app's dar
    - **Changes**: a count for each kind present, each file counted once: `!` conflicted (red), `+` added
      (green), `~` modified (amber), `−` deleted (red), `→` renamed (blue), `?` untracked (teal), `●` staged
      (blue), then `+lines −lines` against `HEAD`; or `✓ clean`.
-   - **Limits**: `5h` and `week` usage of the plan, green under 50%, amber from 50% and red from 80%. They
-     appear after the session's first reply, on a Pro or Max plan.
-2. **Context**: a bar of the context window, each category in the colour `/context` gives it, then the
-   percentage used and the tokens.
+   - **Limits**: a small ring per plan window, `5h` and `wk` written inside, filling green under 50%, amber
+     from 50% and red from 80%, with the percentage beside it. They appear after the session's first reply,
+     on a Pro or Max plan.
+2. **Context**: a bar of the context window, each category in its own colour, then the percentage used. On
+   the desktop app a yellow `compact` at the end of the row compacts the conversation, as `/compact` does.
 3. **Subagents**, only while there are any: a card per agent with its state (running, waiting, queued,
    done, failed, stopped) in its own colour, its time, its task and type, and how many tools it has called.
    Active agents come first; finished ones stay until the next prompt. Ten cards at most, the last saying
