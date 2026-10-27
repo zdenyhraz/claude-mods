@@ -15,8 +15,12 @@ in the terminal they are glyphs.
 
 It runs `git` itself (`rev-parse`, `status --porcelain=v2 --branch`, `diff HEAD --shortstat`) with
 `--no-optional-locks`, so it never takes the index lock from your own git commands. It refreshes every
-10 seconds, after each Bash, PowerShell, Edit, Write or NotebookEdit call, and when a turn ends, and redraws
-only when something changed. Outside a git repository it draws nothing.
+10 seconds, after each Bash, PowerShell, Edit, Write or NotebookEdit call, right after the session enters or
+leaves a worktree, and when a turn ends, and redraws only when something changed. Outside a git repository
+it draws nothing.
+
+The band always describes the session's own directory. Subagents' tool calls and turns don't refresh it,
+since a subagent may work in a worktree of its own.
 
 It adds nothing to what Claude reads and makes no model calls or network requests, so it costs no tokens.
 

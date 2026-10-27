@@ -5,7 +5,7 @@ import type { GitStatus } from '../types'
 import { changedFiles, parseBranch, parseFiles, parseLayout, parseShortstat, repoName, worktreeName } from './git'
 
 const POLL_MS = 10_000
-const MUTATING_TOOLS = /^(Bash|PowerShell|Edit|Write|NotebookEdit)$/
+const REFRESHING_TOOLS = /^(Bash|PowerShell|Edit|Write|NotebookEdit|EnterWorktree|ExitWorktree)$/
 
 const status = atom({ plugin: 'git-band', key: 'status' } as const, null)
 
@@ -89,16 +89,23 @@ export const register: Register = on => {
     return result
   })
 
-  on('tool.call', { tool: MUTATING_TOOLS }, async ($, e, next) => {
+  // A subagent's hooks read its own directory, which may be another worktree than the session's.
+  on('tool.call', { tool: REFRESHING_TOOLS }, async ($, e, next) => {
     const result = await next(e)
-    void refresh($)
+
+    if (e.agentId === undefined) {
+      void refresh($)
+    }
 
     return result
   }).catch(($, e, next) => next(e))
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
-    void refresh($)
+
+    if (e.agentId === undefined) {
+      void refresh($)
+    }
 
     return result
   })

@@ -132,3 +132,61 @@ test('the band picks up a change on the next poll', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: /clean/ })).toBeUndefined()
   await ui.unmount()
 })
+
+const FEATURE = CLEAN.replace('# branch.head main', '# branch.head feature-x').replace('origin/main', 'origin/feature-x')
+
+function fakeWorld(on: On) {
+  const world = { layout: MAIN_LAYOUT, porcelain: CLEAN }
+  on('process.run', (_, e) => {
+    const args = e.argv.join(' ')
+    const stdout = args.includes('rev-parse') ? world.layout : args.includes('status') ? world.porcelain : ''
+
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('tool.call', (_, e) => {
+    if (e.tool === 'EnterWorktree') {
+      world.layout = WORKTREE_LAYOUT
+      world.porcelain = FEATURE
+    } else if (e.tool === 'ExitWorktree') {
+      world.layout = MAIN_LAYOUT
+      world.porcelain = CLEAN
+    }
+
+    return { result: {} }
+  })
+
+  return world
+}
+
+test("a subagent's tool calls leave the band to the session", async ($, on) => {
+  const world = fakeWorld(on)
+  const clock = await start($, on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  world.porcelain = `${CLEAN}\n? from-subagent.txt`
+  await $.tool.call({ tool: 'Bash', command: 'touch from-subagent.txt', agentId: 'a1' })
+  await clock.settle()
+  expect(await ui.find({ type: 'Text', text: /clean/ })).toBeDefined()
+
+  await $.tool.call({ tool: 'Bash', command: 'git status' })
+  await clock.settle()
+  expect(await ui.find({ type: 'Text', text: / untracked$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('entering and leaving a worktree updates the band at once', async ($, on) => {
+  fakeWorld(on)
+  const clock = await start($, on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /main worktree/ })).toBeDefined()
+
+  await $.tool.call({ tool: 'EnterWorktree', name: 'feature-x' })
+  await clock.settle()
+  expect((await ui.find({ type: 'Text', text: /^feature-x$/ }))?.text).toBe('feature-x')
+  expect((await ui.find({ type: 'Text', text: /worktree of/ }))?.text).toBe('worktree of my-app')
+
+  await $.tool.call({ tool: 'ExitWorktree', action: 'keep' })
+  await clock.settle()
+  expect(await ui.find({ type: 'Text', text: /main worktree/ })).toBeDefined()
+  await ui.unmount()
+})
