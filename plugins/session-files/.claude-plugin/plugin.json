@@ -1,0 +1,9 @@
+{
+  "name": "session-files",
+  "version": "0.1.0",
+  "description": "A pane beside the transcript with the files this session added, changed, deleted, renamed or committed, as a tree coloured by change, with each file's diff on hover and the file with its changes marked on click.",
+  "author": { "name": "zdenyhraz", "url": "https://github.com/zdenyhraz" },
+  "homepage": "https://github.com/zdenyhraz/claude-mods/tree/main/plugins/session-files",
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}

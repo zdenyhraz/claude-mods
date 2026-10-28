@@ -7,6 +7,11 @@
       "name": "git-band",
       "source": "./plugins/git-band",
       "description": "A band above the prompt with the session's git branch, worktree, ahead/behind and changed-file counts."
+    },
+    {
+      "name": "session-files",
+      "source": "./plugins/session-files",
+      "description": "A pane beside the transcript with the files this session changed, as a tree coloured by change, with each file's diff on hover and the file with its changes marked on click."
     }
   ]
 }
