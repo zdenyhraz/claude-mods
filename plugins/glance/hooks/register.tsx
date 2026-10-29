@@ -48,7 +48,9 @@ import {
   applyPlanUpdate,
   commandDir,
   commandOf,
+  commitMessage,
   describeTool,
+  dirForms,
   editedPath,
   finishedTasks,
   isCommit,
@@ -450,7 +452,7 @@ function sinceCard(topic: SinceTopic, since: ActivityView, list: readonly AgentV
     const log = since.commitLog ?? []
 
     return log.length === 0
-      ? commandCard('Commits', since.commands.filter(command => isCommit(command.text)))
+      ? commandCard('Commits', since.commands.filter(command => isCommit(command.text)).map(command => ({ ...command, text: commitMessage(command.text) ?? command.text })))
       : [heading('Commits'), ...log.map(commit => ({ text: commit.subject, note: commit.hash, mark: '●', tone: 'sky' as Tone, isHeading: false }))]
   }
 
@@ -577,11 +579,15 @@ async function noteToolEnd($: EngineInterface, tool: string, args: ToolArgs, res
 // What the commit is, read from git in the directory the command ran it in.
 async function noteCommit($: EngineInterface, command: string): Promise<void> {
   const dir = commandDir(command)
-  const run = await git($, [...(dir === null ? [] : ['-C', dir]), 'log', '-1', '--format=%h%x09%s'])
-  const commit = run?.exitCode === 0 ? parseCommit(run.stdout) : null
 
-  if (commit !== null) {
-    await update($, activity, current => (current.since === null ? current : withCommit(current, commit)))
+  for (const at of dir === null ? [null] : dirForms(dir)) {
+    const run = await git($, [...(at === null ? [] : ['-C', at]), 'log', '-1', '--format=%h%x09%s'])
+    const commit = run?.exitCode === 0 ? parseCommit(run.stdout) : null
+
+    if (commit !== null) {
+      await update($, activity, current => (current.since === null ? current : withCommit(current, commit)))
+      return
+    }
   }
 }
 

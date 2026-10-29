@@ -3,7 +3,7 @@ import type { TestBody } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { ago, describe, drawAgents, drawContext, drawPlan, drawState, drawStatus, drawTop, groupsOf, sessionHue, shorten, sliceTones, statusOf, stepOf } from '../hooks/look'
-import { applyPlanUpdate, commandDir, describeTool, isOwnPrompt, isTestCommand, lastPrompt, pickHue, promptText, withHue } from '../hooks/session'
+import { applyPlanUpdate, commandDir, commitMessage, describeTool, dirForms, isOwnPrompt, isTestCommand, lastPrompt, pickHue, promptText, withHue } from '../hooks/session'
 import { isOwnBase, parseDivergence } from '../hooks/git'
 
 type TestEngine = Parameters<TestBody>[0]
@@ -858,6 +858,10 @@ test('what happened since your prompt sits on the git row, each item with its ow
   expect(commandDir('cd "D:/Work/app" && git commit -F msg.txt')).toBe('D:/Work/app')
   expect(commandDir('git -C repo commit -m x')).toBe('repo')
   expect(commandDir('git commit -m x')).toBeNull()
+  expect(dirForms('/d/Work/app')).toEqual(['/d/Work/app', 'D:/Work/app'])
+  expect(dirForms('repo')).toEqual(['repo'])
+  expect(commitMessage('git add -A && git commit -q -m "Rename the band" && git log -1')).toBe('Rename the band')
+  expect(commitMessage('git commit -F msg.txt')).toBeNull()
   expect(findElement(drawn, element => element.props?.key === 'since:files')?.props?.left).toBeGreaterThan(0)
 
   await $.tool.call({ tool: 'Bash', command: 'npm test -- fail' } as never)

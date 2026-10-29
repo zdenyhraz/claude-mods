@@ -291,6 +291,21 @@ export function commandDir(command: string): string | null {
   return match ? (match[2] ?? match[3] ?? match[4] ?? null) : null
 }
 
+// Git Bash writes a drive as `/d/...`, which Windows git reads only as `D:/...`.
+export function dirForms(dir: string): string[] {
+  const drive = /^\/([a-z])(\/.*)?$/i.exec(dir)
+
+  return drive ? [dir, `${drive[1]!.toUpperCase()}:${drive[2] ?? '/'}`] : [dir]
+}
+
+// The first line of a `-m "<message>"` the command gives git.
+export function commitMessage(command: string): string | null {
+  const match = /\s-m\s*("([^"]*)"|'([^']*)')/.exec(command)
+  const line = (match?.[2] ?? match?.[3])?.split(/\r?\n/)[0]?.trim()
+
+  return line ? line : null
+}
+
 export type CommitRecord = { hash: string; subject: string }
 
 // `git log -1 --format=%h%x09%s`.
