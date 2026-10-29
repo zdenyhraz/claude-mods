@@ -1,8 +1,22 @@
-import type { ActivityView, PlanStep } from '../types'
+import type { ActivityView, PlanStep, RunView } from '../types'
 
 const TESTS =
-  /(^|[\s;&|(])((npm|pnpm|yarn|bun)\s+(run\s+)?test\b|pytest\b|jest\b|vitest\b|mocha\b|ctest\b|(go|cargo|dotnet)\s+test\b)|run_test\w*|\bplugin\s+test\b|gtest_filter|\w-test(\.exe)?\b/i
-const BUILDS = /\bsetup\.py\b|\bcmake\s+--build\b|(^|[\s;&|])(make|msbuild|tsc)\b|\b(npm|pnpm|yarn)\s+run\s+build\b|\b(cargo|go|dotnet)\s+build\b/i
+  /(^|[\s;&|(])((npm|pnpm|yarn|bun)\s+(run\s+)?test\b|pytest\b|jest\b|vitest\b|mocha\b|ctest\b|(go|cargo|dotnet)\s+test\b)|run_test\w*|\bplugin\s+test\b|gtest_filter|(^|[;&|(]\s*|[\\/])[\w.-]*\w-test(\.exe)?\b/i
+const BUILDS = new RegExp(
+  [
+    String.raw`\bcmake(\.exe)?["']?\s+--build\b`,
+    String.raw`(^|[\s;&|("'\\/])(make|mingw32-make|nmake|jom|ninja|msbuild|xcodebuild|scons|tsc)(\.exe)?\b`,
+    String.raw`\bdevenv(\.com|\.exe)?\s[^;&|]*[/-](re)?build\b`,
+    String.raw`\b(meson\s+compile|bazel\s+build|conan\s+build|zig\s+build|swift\s+build)\b`,
+    String.raw`\b(cargo|go|dotnet)\s+(build|publish)\b`,
+    String.raw`\b(gradlew?|mvn)\b[^;&|]*\b(build|assemble|compile|package)`,
+    String.raw`\b(npm|pnpm|yarn|bun)\s+run\s+build\b`,
+    String.raw`\b(g\+\+|clang\+\+|gcc|clang|clang-cl|cl)(\.exe)?\s[^;&|]*\.(c|cc|cpp|cxx)\b`,
+    String.raw`\bsetup\.py\b`,
+    String.raw`[\w.-]*build[\w.-]*\.(cmd|bat|ps1|sh|py)\b`,
+  ].join('|'),
+  'i',
+)
 const COMMIT = /\bgit\s+(-c\s+\S+\s+)*commit\b/
 const PUSH = /\bgit\s+(-c\s+\S+\s+)*push\b/
 const EDITING = /^(Edit|Write|NotebookEdit)$/
@@ -23,16 +37,21 @@ export const commandOf = (args: ToolArgs): string => textOf(args.command)
 export const editedPath = (tool: string, args: ToolArgs): string | null =>
   EDITING.test(tool) ? textOf(args.file_path) || textOf(args.notebook_path) || null : null
 
-export const isTestCommand = (command: string): boolean => TESTS.test(command)
+// A commit message's words are not commands.
+const withoutMessages = (command: string): string => command.replace(/\s(-m|--message)\s*("[^"]*"|'[^']*')/g, '')
+
+export const isTestCommand = (command: string): boolean => TESTS.test(withoutMessages(command))
+
+export const isBuildCommand = (command: string): boolean => BUILDS.test(withoutMessages(command))
 
 export const isCommit = (command: string): boolean => COMMIT.test(command)
 
 function describeCommand(command: string): string {
-  if (TESTS.test(command)) {
+  if (isTestCommand(command)) {
     return 'Running tests'
   }
 
-  if (BUILDS.test(command)) {
+  if (isBuildCommand(command)) {
     return 'Building'
   }
 
@@ -223,6 +242,12 @@ export function startedTask(tool: string, args: ToolArgs, output: unknown): Back
 // The tasks a task notification reports on.
 export const finishedTasks = (text: string): string[] => [...text.matchAll(/<task-id>\s*([^<\s]+)\s*<\/task-id>/g)].map(match => match[1] ?? '')
 
+export type TaskOutcome = { id: string; isOk: boolean }
+
+// Each task a task notification reports on, with whether it completed: `<task-id>…</task-id> … <status>completed</status>`.
+export const taskOutcomes = (text: string): TaskOutcome[] =>
+  [...text.matchAll(/<task-id>\s*([^<\s]+)\s*<\/task-id>[\s\S]*?<status>\s*(\w+)\s*<\/status>/g)].map(match => ({ id: match[1] ?? '', isOk: match[2] === 'completed' }))
+
 type TranscriptRow = { role: string; text: string; toolResults?: readonly unknown[] }
 
 
@@ -270,9 +295,19 @@ export function withHue(table: HueTable, name: string, hue: string, now: number)
   return Object.fromEntries(entries.sort((a, b) => b[1].at - a[1].at).slice(0, MAX_HUES_KEPT))
 }
 
-export const NO_ACTIVITY: ActivityView = { since: null, files: [], commands: [], tests: null, commits: 0 }
+export const NO_ACTIVITY: ActivityView = { since: null, files: [], commands: [], tests: null, builds: null, commits: 0 }
 
 const MAX_COMMANDS = 8
+
+const settled = (run: RunView | null | undefined, outcomes: readonly TaskOutcome[]): RunView | null => {
+  const outcome = outcomes.find(known => run?.taskId !== undefined && known.id === run.taskId)
+
+  return run && outcome ? { isOk: outcome.isOk, at: run.at } : (run ?? null)
+}
+
+export function withOutcomes(activity: ActivityView, outcomes: readonly TaskOutcome[]): ActivityView {
+  return { ...activity, tests: settled(activity.tests, outcomes), builds: settled(activity.builds, outcomes) }
+}
 
 export function withEdit(activity: ActivityView, path: string): ActivityView {
   const known = activity.files.some(file => file.path === path)
@@ -319,13 +354,16 @@ export function withCommit(activity: ActivityView, commit: CommitRecord): Activi
   return { ...activity, commitLog: [...(activity.commitLog ?? []).filter(known => known.hash !== commit.hash), commit] }
 }
 
-export function withCommand(activity: ActivityView, command: string, isOk: boolean, ms: number, now: number): ActivityView {
+// A command sent to the background, as task taskId, has no result until its task notification.
+export function withCommand(activity: ActivityView, command: string, isOk: boolean, ms: number, now: number, taskId?: string): ActivityView {
   const text = command.split(/\r?\n/)[0]?.trim() ?? ''
+  const run: RunView = taskId === undefined ? { isOk, at: now } : { isOk: null, at: now, taskId }
 
   return {
     ...activity,
     commands: [...activity.commands, { text, isOk, ms }].slice(-MAX_COMMANDS),
-    tests: isTestCommand(command) ? { isOk, at: now } : activity.tests,
+    tests: isTestCommand(command) ? run : activity.tests,
+    builds: isBuildCommand(command) ? run : (activity.builds ?? null),
     commits: activity.commits + (isOk && isCommit(command) ? 1 : 0),
   }
 }

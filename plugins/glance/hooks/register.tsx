@@ -53,6 +53,7 @@ import {
   dirForms,
   editedPath,
   finishedTasks,
+  isBuildCommand,
   isCommit,
   isOwnPrompt,
   isTestCommand,
@@ -63,12 +64,14 @@ import {
   promptText,
   shortPath,
   startedTask,
+  taskOutcomes,
   todosOf,
   waitsFor,
   withCommand,
   withCommit,
   withEdit,
   withHue,
+  withOutcomes,
 } from './session'
 import type { HueTable, ToolArgs } from './session'
 
@@ -444,6 +447,10 @@ function sinceCard(topic: SinceTopic, since: ActivityView, list: readonly AgentV
     ]
   }
 
+  if (topic === 'builds') {
+    return commandCard('Builds', since.commands.filter(command => isBuildCommand(command.text)))
+  }
+
   if (topic === 'tests') {
     return commandCard('Tests', since.commands.filter(command => isTestCommand(command.text)))
   }
@@ -568,7 +575,8 @@ async function noteToolEnd($: EngineInterface, tool: string, args: ToolArgs, res
     await update($, activity, current => withEdit(current, shortPath(path)))
   } else if (tool === 'Bash' || tool === 'PowerShell') {
     const command = commandOf(args)
-    await update($, activity, current => withCommand(current, command, isOk, now - startedAt, now))
+    const taskId = 'result' in result ? startedTask(tool, args, result.result)?.id : undefined
+    await update($, activity, current => withCommand(current, command, isOk, now - startedAt, now, taskId))
 
     if (isOk && isCommit(command)) {
       await noteCommit($, command)
@@ -710,6 +718,7 @@ export const register: Register = on => {
       void notePrompt($, e.text, wasTurnRunning).catch(() => undefined)
     } else if (e.origin?.kind === 'task-notification') {
       void endBackground($, finishedTasks(e.text)).catch(() => undefined)
+      void update($, activity, current => withOutcomes(current, taskOutcomes(e.text))).catch(() => undefined)
     }
 
     return result

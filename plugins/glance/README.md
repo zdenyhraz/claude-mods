@@ -38,10 +38,14 @@ sessions. Screenshots are in the [repository README](../../README.md#glance).
    shows a card with the names whole, the upstream and the base with how far ahead and behind each is, and each
    kind of change in words.
 3. **This prompt**, once something happened since your prompt, subagents' work included: the files edited, the
-   last test run (`tests ✓` or `tests ✗`), the commits and the subagents that finished; with none of those, how
-   many commands ran. Where room is short they keep their icons and numbers alone (`3`, `✓`). On the desktop
-   app, hovering one lists what it counts and nothing else: the files with their edits, the test runs, each
-   commit's subject and short hash, the subagents or the commands with their results and times.
+   last build (`build ✓` or `build ✗`) and test run (`tests ✓` or `tests ✗`), the commits and the subagents
+   that finished; with none of those, how many commands ran. A build or test run sent to the background shows as
+   `building` or `testing` until its task reports how it ended. Builds are recognised by command: CMake, Ninja,
+   Make, MSBuild, Visual Studio, Meson, Bazel, Xcode, compilers called directly, Cargo, Go, .NET, Gradle, Maven,
+   npm, `setup.py`, and any script with `build` in its name. Where room is short they keep their icons and
+   numbers alone (`3`, `✓`). On the desktop app, hovering one lists what it counts and nothing else: the files
+   with their edits, the builds, the test runs, each commit's subject and short hash, the subagents or the
+   commands with their results and times.
 4. **Context and limits**: a bar of the context window, each category in its own colour, then the percentage used;
    then a small ring per plan window, `5h` and `wk` written inside, filling green under 50%, amber from 50% and
    red from 80%, with the percentage beside it, which appear after the session's first reply on a Pro or Max plan

@@ -48,12 +48,16 @@ export type PlanStep = { content: string; status: 'pending' | 'in_progress' | 'c
 
 export type CommandRun = { text: string; isOk: boolean; ms: number }
 
+// The last test or build run; isOk is null while it runs in the background, as task taskId.
+export type RunView = { isOk: boolean | null; at: number; taskId?: string }
+
 // What happened since the person's last prompt, subagents' work included.
 export type ActivityView = {
   since: number | null
   files: { path: string; edits: number }[]
   commands: CommandRun[]
-  tests: { isOk: boolean; at: number } | null
+  tests: RunView | null
+  builds?: RunView | null
   commits: number
   // Each commit made since the prompt, as git records it.
   commitLog?: { hash: string; subject: string }[]

@@ -3,7 +3,7 @@ import type { TestBody } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { ago, describe, drawAgents, drawContext, drawPlan, drawState, drawStatus, drawTop, groupsOf, sessionHue, shorten, sliceTones, statusOf, stepOf } from '../hooks/look'
-import { applyPlanUpdate, commandDir, commitMessage, describeTool, dirForms, isOwnPrompt, isTestCommand, lastPrompt, pickHue, promptText, withHue } from '../hooks/session'
+import { applyPlanUpdate, commandDir, commitMessage, describeTool, dirForms, isBuildCommand, isOwnPrompt, isTestCommand, lastPrompt, pickHue, promptText, withHue } from '../hooks/session'
 import { isOwnBase, parseDivergence } from '../hooks/git'
 
 type TestEngine = Parameters<TestBody>[0]
@@ -815,6 +815,9 @@ test('tool calls read as what the session is doing, and test commands are recogn
   expect(describeTool('mcp__ccd_turn__update_plan', {})).toBeNull()
   expect(isTestCommand('ls tests')).toBe(false)
   expect(isTestCommand('build/Release/my-app-test --gtest_filter=Nav.*')).toBe(true)
+  expect(isTestCommand('my-app-test.exe')).toBe(true)
+  expect(isTestCommand('python setup.py --targets my-app-test')).toBe(false)
+  expect(describeTool('Bash', { command: 'cmake --build build --config Release' })).toBe('Building')
   expect(ago(0)).toBe('just now')
   expect(ago(14 * 60_000)).toBe('14 m ago')
   expect(ago(3 * 3_600_000)).toBe('3 h ago')
@@ -870,6 +873,70 @@ test('what happened since your prompt sits on the git row, each item with its ow
 
   await clock.advance(14 * 60_000)
   expect(await shown(ui)).toContain('Fix the nav 14 m ago')
+  await ui.unmount()
+})
+
+test('build commands of the common build systems are recognised, and words in a commit message are not', () => {
+  const builds = [
+    'cmake --build build --config Release -j',
+    'cd build && ninja',
+    'make -j8 all',
+    'mingw32-make',
+    'nmake /f Makefile.win',
+    'msbuild MyApp.sln /p:Configuration=Release',
+    '& "C:/Program Files/MSBuild/MSBuild.exe" MyApp.sln',
+    'devenv MyApp.sln /Build Release',
+    'meson compile -C builddir',
+    'bazel build //app:main',
+    'xcodebuild -scheme MyApp',
+    'g++ -O2 -o app main.cpp',
+    'cl /EHsc main.cpp',
+    'cargo build --release',
+    'dotnet build',
+    './gradlew assembleDebug',
+    'npm run build',
+    'python setup.py --build_type Release',
+    "& 'C:/scratch/build-release.cmd'",
+    './scripts/build.sh',
+  ]
+  const others = ['cmake -S . -B build', 'devenv MyApp.sln', 'ls build', 'git commit -m "make the build faster"', 'cat CMakeLists.txt', 'npm test']
+
+  expect(builds.filter(command => !isBuildCommand(command))).toEqual([])
+  expect(others.filter(command => isBuildCommand(command))).toEqual([])
+})
+
+test('a build shows on the git row, and one sent to the background waits for its task notification', async ($, on) => {
+  fakeGit(on, MAIN_LAYOUT, CLEAN)
+  fakeTools(on, /broken/)
+  const clock = await start($, on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const notify = (status: string) =>
+    $.prompt.submit({ text: `<task-notification>\n<task-id>bg-1</task-id>\n<status>${status}</status>\n</task-notification>`, origin: { kind: 'task-notification' } } as never)
+
+  await $.prompt.submit({ text: 'Build it' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'cmake --build build' } as never)
+  await clock.settle()
+  expect(await shown(ui)).toContain('this prompt · build ✓')
+
+  await $.tool.call({ tool: 'Bash', command: 'cmake --build build --target broken' } as never)
+  await clock.settle()
+  expect(await shown(ui)).toContain('build ✗')
+
+  await $.tool.call({ tool: 'Bash', command: 'cmake --build build', run_in_background: true } as never)
+  await clock.settle()
+  expect(await shown(ui)).toContain('this prompt · building')
+
+  await notify('completed')
+  await clock.settle()
+  expect(await shown(ui)).toContain('build ✓')
+
+  await $.tool.call({ tool: 'Bash', command: 'cmake --build build && ctest', run_in_background: true } as never)
+  await notify('failed')
+  await clock.settle()
+  expect(await shown(ui)).toContain('build ✗ · tests ✗')
+
+  const card = JSON.stringify(findElement(await ui.drawn(), element => element.type === 'Box' && element.props?.key === 'since:builds') ?? null)
+  expect(card).toContain('cmake --build build --target broken')
   await ui.unmount()
 })
 
