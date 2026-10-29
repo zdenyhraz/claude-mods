@@ -1,7 +1,7 @@
-# git-band
+# glance
 
 A session dashboard above the Claude Code prompt, made for getting your bearings when you switch between
-sessions. Screenshots are in the [repository README](../../README.md#git-band).
+sessions. Screenshots are in the [repository README](../../README.md#glance).
 
 1. **Status**, once you have written a prompt, or the session has a task list or a turn behind it:
    - **State**, as a solid chip in the state's colour: what the session is doing right now (`Running tests`,
@@ -69,7 +69,7 @@ longest, so up to six sessions open together all differ; the main checkout goes 
 desktop app the colour runs as a stripe down the band's left edge, so you know which session you are looking
 at before reading anything.
 
-Other mods' bands stay: git-band stacks above whatever they draw in the band, and a survey shows below it.
+Other mods' bands stay: glance stacks above whatever they draw in the band, and a survey shows below it.
 
 ## How it stays current
 
@@ -108,7 +108,7 @@ It adds nothing to what Claude reads and makes no model calls or network request
 ## Install
 
 ```text
-/plugin install git-band --marketplace zdenyhraz/claude-mods
+/plugin install glance --marketplace zdenyhraz/claude-mods
 ```
 
 See the [repository README](../../README.md#install) for the desktop app and shell.

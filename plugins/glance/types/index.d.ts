@@ -61,7 +61,7 @@ export type ActivityView = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'git-band': {
+    'glance': {
       status: GitStatus | null
       usage: UsageView | null
       agents: AgentView[]

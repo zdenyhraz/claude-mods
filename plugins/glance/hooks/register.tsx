@@ -78,15 +78,15 @@ const TICK_MS = 5_000
 const PX_PER_COLUMN = 7.6
 const REFRESHING_TOOLS = /^(Bash|PowerShell|Edit|Write|NotebookEdit|EnterWorktree|ExitWorktree)$/
 
-const status = atom({ plugin: 'git-band', key: 'status' } as const, null)
-const usage = atom({ plugin: 'git-band', key: 'usage' } as const, null)
-const agents = atom({ plugin: 'git-band', key: 'agents' } as const, [])
-const latestPrompt = atom({ plugin: 'git-band', key: 'latestPrompt' } as const, null)
-const turn = atom({ plugin: 'git-band', key: 'turn' } as const, { phase: 'idle', detail: '', at: 0 })
-const plan = atom({ plugin: 'git-band', key: 'plan' } as const, [])
-const activity = atom({ plugin: 'git-band', key: 'activity' } as const, NO_ACTIVITY)
-const hue = atom({ plugin: 'git-band', key: 'hue' } as const, null)
-const background = atom({ plugin: 'git-band', key: 'background' } as const, [])
+const status = atom({ plugin: 'glance', key: 'status' } as const, null)
+const usage = atom({ plugin: 'glance', key: 'usage' } as const, null)
+const agents = atom({ plugin: 'glance', key: 'agents' } as const, [])
+const latestPrompt = atom({ plugin: 'glance', key: 'latestPrompt' } as const, null)
+const turn = atom({ plugin: 'glance', key: 'turn' } as const, { phase: 'idle', detail: '', at: 0 })
+const plan = atom({ plugin: 'glance', key: 'plan' } as const, [])
+const activity = atom({ plugin: 'glance', key: 'activity' } as const, NO_ACTIVITY)
+const hue = atom({ plugin: 'glance', key: 'hue' } as const, null)
+const background = atom({ plugin: 'glance', key: 'background' } as const, [])
 
 // The terminal draws text alone, so each tone of the desktop's image maps to the theme key nearest it.
 const THEME_KEYS: Record<Tone, Color> = {
@@ -644,7 +644,7 @@ function stackBands(band: RenderNode, rest: RenderElement | null | undefined): R
   return {
     type: 'Box',
     props: { key: BANDS, flexDirection: 'column' },
-    children: [{ type: 'Box', props: { key: 'band:git-band', flexDirection: 'column' }, children: [band] }, ...bandsBelow(rest)],
+    children: [{ type: 'Box', props: { key: 'band:glance', flexDirection: 'column' }, children: [band] }, ...bandsBelow(rest)],
   }
 }
 

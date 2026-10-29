@@ -9,7 +9,7 @@ import { isOwnBase, parseDivergence } from '../hooks/git'
 type TestEngine = Parameters<TestBody>[0]
 
 const BAND = {
-  plugin: 'git-band',
+  plugin: 'glance',
   component: 'AbovePrompt',
   requestId: 'above-prompt',
   props: {
@@ -305,7 +305,7 @@ test("another mod's band stays below this one, in one column of bands", async ($
   const root = (await ui.drawn()) as { props?: { key?: string }; children?: { props?: { key?: string } }[] }
 
   expect(root.props?.key).toBe('bands')
-  expect(root.children?.map(child => child.props?.key)).toEqual(['band:git-band', 'band:other'])
+  expect(root.children?.map(child => child.props?.key)).toEqual(['band:glance', 'band:other'])
   expect(await ui.find({ type: 'Text', text: /other band/ })).toBeDefined()
   await ui.unmount()
 })
