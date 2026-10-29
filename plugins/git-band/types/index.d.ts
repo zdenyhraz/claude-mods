@@ -55,6 +55,8 @@ export type ActivityView = {
   commands: CommandRun[]
   tests: { isOk: boolean; at: number } | null
   commits: number
+  // Each commit made since the prompt, as git records it.
+  commitLog?: { hash: string; subject: string }[]
 }
 
 declare module 'claude-code' {

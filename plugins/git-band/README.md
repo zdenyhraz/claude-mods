@@ -41,9 +41,9 @@ sessions. Screenshots are in the [repository README](../../README.md#git-band).
      on a Pro or Max plan.
 
    On the desktop app, hovering the names shows a card with them whole, the upstream and the base with how far
-   ahead and behind each is, and each kind of change in words; hovering one of the since-your-prompt items lists what it
-   counts and nothing else: the files with their edits, the test runs, the commits, the subagents or the
-   commands with their results and times.
+   ahead and behind each is, and each kind of change in words; hovering one of the since-your-prompt items
+   lists what it counts and nothing else: the files with their edits, the test runs, each commit's subject and
+   short hash, the subagents or the commands with their results and times.
 3. **Context**: a bar of the context window, each category in its own colour, then the percentage used. On
    the desktop app a yellow `compact` at the end of the row runs `/compact`; clicked during a turn, it runs
    once the turn ends.

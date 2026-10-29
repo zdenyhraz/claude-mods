@@ -42,6 +42,7 @@ import type { Dashboard, Icon, Image, Item, SinceTopic, Tone } from './look'
 import {
   NO_ACTIVITY,
   applyPlanUpdate,
+  commandDir,
   commandOf,
   describeTool,
   editedPath,
@@ -50,6 +51,7 @@ import {
   isOwnPrompt,
   isTestCommand,
   lastPrompt,
+  parseCommit,
   pickHue,
   promptLine,
   promptText,
@@ -58,6 +60,7 @@ import {
   todosOf,
   waitsFor,
   withCommand,
+  withCommit,
   withEdit,
   withHue,
 } from './session'
@@ -440,7 +443,11 @@ function sinceCard(topic: SinceTopic, since: ActivityView, list: readonly AgentV
   }
 
   if (topic === 'commits') {
-    return commandCard('Commits', since.commands.filter(command => isCommit(command.text)))
+    const log = since.commitLog ?? []
+
+    return log.length === 0
+      ? commandCard('Commits', since.commands.filter(command => isCommit(command.text)))
+      : [heading('Commits'), ...log.map(commit => ({ text: commit.subject, note: commit.hash, mark: '●', tone: 'sky' as Tone, isHeading: false }))]
   }
 
   return commandCard('Ran', since.commands)
@@ -554,7 +561,23 @@ async function noteToolEnd($: EngineInterface, tool: string, args: ToolArgs, res
   if (path !== null && isOk) {
     await update($, activity, current => withEdit(current, shortPath(path)))
   } else if (tool === 'Bash' || tool === 'PowerShell') {
-    await update($, activity, current => withCommand(current, commandOf(args), isOk, now - startedAt, now))
+    const command = commandOf(args)
+    await update($, activity, current => withCommand(current, command, isOk, now - startedAt, now))
+
+    if (isOk && isCommit(command)) {
+      await noteCommit($, command)
+    }
+  }
+}
+
+// What the commit is, read from git in the directory the command ran it in.
+async function noteCommit($: EngineInterface, command: string): Promise<void> {
+  const dir = commandDir(command)
+  const run = await git($, [...(dir === null ? [] : ['-C', dir]), 'log', '-1', '--format=%h%x09%s'])
+  const commit = run?.exitCode === 0 ? parseCommit(run.stdout) : null
+
+  if (commit !== null) {
+    await update($, activity, current => (current.since === null ? current : withCommit(current, commit)))
   }
 }
 

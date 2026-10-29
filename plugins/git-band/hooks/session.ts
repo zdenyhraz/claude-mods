@@ -281,6 +281,29 @@ export function withEdit(activity: ActivityView, path: string): ActivityView {
   return { ...activity, files }
 }
 
+const PATH_ARGUMENT = String.raw`("([^"]+)"|'([^']+)'|(\S+))`
+
+// Where a command runs git: `git -C <dir>`, else a `cd <dir>` it starts with; null for the session's own directory.
+export function commandDir(command: string): string | null {
+  const match =
+    new RegExp(String.raw`\bgit\s+-C\s+${PATH_ARGUMENT}`).exec(command) ?? new RegExp(String.raw`^\s*(?:cd|Set-Location|pushd)\s+${PATH_ARGUMENT}`, 'i').exec(command)
+
+  return match ? (match[2] ?? match[3] ?? match[4] ?? null) : null
+}
+
+export type CommitRecord = { hash: string; subject: string }
+
+// `git log -1 --format=%h%x09%s`.
+export function parseCommit(stdout: string): CommitRecord | null {
+  const [hash, ...subject] = stdout.trim().split('\t')
+
+  return hash ? { hash, subject: subject.join('\t') } : null
+}
+
+export function withCommit(activity: ActivityView, commit: CommitRecord): ActivityView {
+  return { ...activity, commitLog: [...(activity.commitLog ?? []).filter(known => known.hash !== commit.hash), commit] }
+}
+
 export function withCommand(activity: ActivityView, command: string, isOk: boolean, ms: number, now: number): ActivityView {
   const text = command.split(/\r?\n/)[0]?.trim() ?? ''
 

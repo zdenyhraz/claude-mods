@@ -3,7 +3,7 @@ import type { TestBody } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { ago, describe, drawAgents, drawContext, drawPlan, drawStatus, drawTop, groupsOf, sessionHue, shorten, sliceTones, statusOf, stepOf } from '../hooks/look'
-import { applyPlanUpdate, describeTool, isOwnPrompt, isTestCommand, lastPrompt, pickHue, promptText, withHue } from '../hooks/session'
+import { applyPlanUpdate, commandDir, describeTool, isOwnPrompt, isTestCommand, lastPrompt, pickHue, promptText, withHue } from '../hooks/session'
 import { isOwnBase, parseDivergence } from '../hooks/git'
 
 type TestEngine = Parameters<TestBody>[0]
@@ -47,6 +47,10 @@ function fakeGit(on: On, layout: string | null, porcelain: string, shortstat = '
     const args = e.argv.join(' ')
     const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
     const fail = { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+
+    if (args.includes('log -1')) {
+      return ok('abc1234\tFix the nav\n')
+    }
 
     if (args.includes('symbolic-ref')) {
       return divergence === null ? fail : ok('origin/main\n')
@@ -845,8 +849,12 @@ test('what happened since your prompt sits on the git row, each item with its ow
   expect(card('tests')).toContain('npm test')
   expect(card('tests')).not.toContain('git commit')
   expect(card('tests')).not.toContain('src/nav.ts')
-  expect(card('commits')).toContain('git commit')
-  expect(card('commits')).not.toContain('npm test')
+  expect(card('commits')).toContain('Fix the nav')
+  expect(card('commits')).toContain('abc1234')
+  expect(card('commits')).not.toContain('git commit')
+  expect(commandDir('cd "D:/Work/app" && git commit -F msg.txt')).toBe('D:/Work/app')
+  expect(commandDir('git -C repo commit -m x')).toBe('repo')
+  expect(commandDir('git commit -m x')).toBeNull()
   expect(findElement(drawn, element => element.props?.key === 'since:files')?.props?.left).toBeGreaterThan(0)
 
   await $.tool.call({ tool: 'Bash', command: 'npm test -- fail' } as never)
