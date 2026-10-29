@@ -25,6 +25,10 @@ sessions. Screenshots are in the [repository README](../../README.md#git-band).
    - **Worktree**, only in a linked worktree: a fork icon and its name, in the worktree's colour.
    - **Branch** (orange): its name, or the short commit id when detached; then `↑n` / `↓n` ahead of and
      behind its upstream, or `no upstream`.
+   - **Base**, on a branch other than the base: a merge icon, the base branch's name and `↑n` / `↓n`, how
+     many commits the branch has that the base lacks and the other way round, e.g. `main ↑5 ↓12`. The base is
+     what `origin/HEAD` names, else `origin/main`, `origin/master`, `main` or `master`; it shows only once the
+     two differ, and drops its name where room is short.
    - **Changes**: a count for each kind present, each file counted once: `!` conflicted (red), `+` added
      (green), `~` modified (amber), `−` deleted (red), `→` renamed (blue), `?` untracked (teal), `●` staged
      (blue), then `+lines −lines` against `HEAD`; or `✓ clean`.
@@ -36,8 +40,8 @@ sessions. Screenshots are in the [repository README](../../README.md#git-band).
      from 50% and red from 80%, with the percentage beside it. They appear after the session's first reply,
      on a Pro or Max plan.
 
-   On the desktop app, hovering the names shows a card with them whole, the upstream with how far ahead and
-   behind it is, and each kind of change in words; hovering one of the since-your-prompt items lists what it
+   On the desktop app, hovering the names shows a card with them whole, the upstream and the base with how far
+   ahead and behind each is, and each kind of change in words; hovering one of the since-your-prompt items lists what it
    counts and nothing else: the files with their edits, the test runs, the commits, the subagents or the
    commands with their results and times.
 3. **Context**: a bar of the context window, each category in its own colour, then the percentage used. On

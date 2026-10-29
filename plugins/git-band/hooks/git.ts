@@ -31,6 +31,25 @@ export function worktreeName(layout: Layout): string | null {
   return normalize(layout.gitDir) === normalize(layout.commonDir) ? null : baseName(layout.toplevel)
 }
 
+export type BaseInfo = { name: string; ahead: number; behind: number }
+
+// Tried in order when origin/HEAD names no default branch.
+export const BASE_CANDIDATES = ['origin/main', 'origin/master', 'main', 'master']
+
+// A branch against its own remote counterpart is what its upstream already says.
+export const isOwnBase = (branch: string, base: string): boolean => base === branch || base.replace(/^origin\//, '') === branch
+
+// `git rev-list --left-right --count <base>...HEAD`: the commits only the base has, then those only HEAD has.
+export function parseDivergence(name: string, stdout: string): BaseInfo | null {
+  const [behind, ahead] = stdout.trim().split(/\s+/).map(Number)
+
+  if (behind === undefined || ahead === undefined || !Number.isFinite(behind) || !Number.isFinite(ahead)) {
+    return null
+  }
+
+  return { name, ahead, behind }
+}
+
 export function parseBranch(porcelain: string): BranchInfo {
   const info: BranchInfo = { branch: '', isDetached: false, upstream: null, ahead: 0, behind: 0 }
   let oid = ''

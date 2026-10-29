@@ -2,8 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { Color, EngineInterface, ProcessRunResult, Register, RenderElement, RenderNode, SessionContextUsage, SessionRateLimit, Timer, ToolCallResult } from 'claude-code'
 
 import type { ActivityView, AgentView, CommandRun, GitStatus, TurnPhase, UsageView } from '../types'
-import { parseBranch, parseFiles, parseLayout, parseShortstat, repoName, worktreeName } from './git'
-import type { Layout } from './git'
+import { BASE_CANDIDATES, isOwnBase, parseBranch, parseDivergence, parseFiles, parseLayout, parseShortstat, repoName, worktreeName } from './git'
+import type { BaseInfo, Layout } from './git'
 import {
   activityOf,
   agentTime,
@@ -109,6 +109,7 @@ const GLYPHS: Partial<Record<Icon, string>> = {
   repo: '▤',
   worktree: '⑂',
   branch: '⎇',
+  base: '⇅',
   running: '●',
   waiting: '◐',
   done: '✓',
@@ -214,13 +215,60 @@ async function readStatus($: EngineInterface): Promise<GitStatus | null | undefi
     return undefined
   }
 
+  const branch = parseBranch(statusRun.stdout)
+
   return {
     repo: repoName(layout),
     worktree: worktreeName(layout),
-    ...parseBranch(statusRun.stdout),
+    ...branch,
     ...parseFiles(statusRun.stdout),
     ...parseShortstat(diffRun?.exitCode === 0 ? diffRun.stdout : ''),
+    base: branch.isDetached ? null : await readBase($, layout.commonDir, branch.branch),
   }
+}
+
+// The repository's base branch, found once per repository.
+const bases = new Map<string, string | null>()
+
+async function findBase($: EngineInterface, repo: string): Promise<string | null> {
+  const known = bases.get(repo)
+
+  if (known !== undefined) {
+    return known
+  }
+
+  const head = await git($, ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'])
+
+  if (head === null) {
+    return null
+  }
+
+  let found = head?.exitCode === 0 && head.stdout.trim() !== '' ? head.stdout.trim() : null
+
+  for (const candidate of found === null ? BASE_CANDIDATES : []) {
+    const run = await git($, ['rev-parse', '--verify', '--quiet', `${candidate}^{commit}`])
+
+    if (run?.exitCode === 0 && /^[0-9a-f]{40}/.test(run.stdout.trim())) {
+      found = candidate
+      break
+    }
+  }
+
+  bases.set(repo, found)
+
+  return found
+}
+
+async function readBase($: EngineInterface, repo: string, branch: string): Promise<BaseInfo | null> {
+  const base = await findBase($, repo)
+
+  if (base === null || isOwnBase(branch, base)) {
+    return null
+  }
+
+  const run = await git($, ['rev-list', '--left-right', '--count', `${base}...HEAD`])
+
+  return run?.exitCode === 0 ? parseDivergence(base, run.stdout) : null
 }
 
 let isRefreshing = false

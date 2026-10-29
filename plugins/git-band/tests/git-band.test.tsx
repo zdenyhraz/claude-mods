@@ -4,6 +4,7 @@ import type { On } from 'claude-code'
 
 import { ago, describe, drawAgents, drawContext, drawPlan, drawStatus, drawTop, groupsOf, sessionHue, shorten, sliceTones, statusOf, stepOf } from '../hooks/look'
 import { applyPlanUpdate, describeTool, isOwnPrompt, isTestCommand, lastPrompt, pickHue, withHue } from '../hooks/session'
+import { isOwnBase, parseDivergence } from '../hooks/git'
 
 type TestEngine = Parameters<TestBody>[0]
 
@@ -41,10 +42,23 @@ const DIRTY = [
 
 const CLEAN = ['# branch.oid 9e3f718f7bf74bf607c415db93a811adc9b45d13', '# branch.head main', '# branch.upstream origin/main', '# branch.ab +0 -0'].join('\n')
 
-function fakeGit(on: On, layout: string | null, porcelain: string, shortstat = '') {
+function fakeGit(on: On, layout: string | null, porcelain: string, shortstat = '', divergence: string | null = null) {
   on('process.run', (_, e) => {
     const args = e.argv.join(' ')
     const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+    const fail = { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+
+    if (args.includes('symbolic-ref')) {
+      return divergence === null ? fail : ok('origin/main\n')
+    }
+
+    if (args.includes('rev-list')) {
+      return divergence === null ? fail : ok(divergence)
+    }
+
+    if (args.includes('--verify')) {
+      return fail
+    }
 
     if (args.includes('rev-parse')) {
       return layout === null
@@ -592,6 +606,21 @@ test('hovering the git row shows its names whole, the upstream and the changes i
   }
 
   expect(await shown(ui)).toContain('branch zdenyhraz/camera-da-…-and-then-some-more ')
+  await ui.unmount()
+})
+
+test('the git row shows how far the branch has gone from the base branch, and the base itself shows none', async ($, on) => {
+  fakeGit(on, WORKTREE_LAYOUT, DIRTY, '', '12\t3\n')
+  await start($, on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  expect(await shown(ui)).toContain('base main ↑3 ↓12')
+  expect(await ui.find({ type: 'Text', text: /^against origin\/main$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^12 behind$/ })).toBeDefined()
+  expect(isOwnBase('main', 'origin/main')).toBe(true)
+  expect(isOwnBase('zdenyhraz/fix-nav', 'origin/main')).toBe(false)
+  expect(parseDivergence('origin/main', '0\t0')).toEqual({ name: 'origin/main', ahead: 0, behind: 0 })
+  expect(groupsOf({ ...SMALL_REPO, base: { name: 'origin/main', ahead: 0, behind: 0 } }).some(group => group.key === 'base')).toBe(false)
   await ui.unmount()
 })
 

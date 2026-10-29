@@ -36,6 +36,7 @@ export type Icon =
   | 'flask'
   | 'commit'
   | 'bot'
+  | 'base'
 export type Token = { text: string; tone: Tone }
 export type Group = { key: string; border: Tone; icon?: { name: Icon; tone: Tone }; tokens: Token[] }
 
@@ -102,6 +103,7 @@ const ICON_PATHS: Record<Icon, string> = {
   flask: '<path d="M10 2v7.31"/><path d="M14 9.3V1.99"/><path d="M8.5 2h7"/><path d="M14 9.3a6.5 6.5 0 1 1-4 0"/><path d="M5.52 16h12.96"/>',
   commit: '<circle cx="12" cy="12" r="3"/><path d="M3 12h6"/><path d="M15 12h6"/>',
   bot: '<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>',
+  base: '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/>',
 }
 
 const CHANGES: { key: keyof GitStatus; symbol: string; word: string; tone: Tone }[] = [
@@ -168,6 +170,8 @@ export function sessionHue(git: GitStatus): Tone {
   return WORKTREE_HUES[hash % WORKTREE_HUES.length] ?? 'violet'
 }
 
+const baseName = (ref: string): string => ref.replace(/^origin\//, '')
+
 export function groupsOf(git: GitStatus, fit: GitFit = FULL, hue: Tone = sessionHue(git)): Group[] {
   const groups: Group[] = [
     { key: 'repo', border: 'sky', icon: { name: 'repo', tone: 'sky' }, tokens: [{ text: shorten(git.repo, fit.repo), tone: 'sky' }] },
@@ -195,6 +199,23 @@ export function groupsOf(git: GitStatus, fit: GitFit = FULL, hue: Tone = session
   }
 
   groups.push({ key: 'branch', border: 'claude', icon: { name: 'branch', tone: 'claude' }, tokens: branch })
+
+  const base = git.base
+
+  if (base && (base.ahead > 0 || base.behind > 0)) {
+    // Where room is short the base keeps its icon and counts and drops its name.
+    const tokens: Token[] = fit.hasLines ? [{ text: baseName(base.name), tone: 'gray' }] : []
+
+    if (base.ahead > 0) {
+      tokens.push({ text: `↑${base.ahead}`, tone: 'success' })
+    }
+
+    if (base.behind > 0) {
+      tokens.push({ text: `↓${base.behind}`, tone: 'warning' })
+    }
+
+    groups.push({ key: 'base', border: 'gray', icon: { name: 'base', tone: 'gray' }, tokens })
+  }
 
   const present = CHANGES.filter(change => Number(git[change.key]) > 0)
   let counts: Token[] = present.map(change => ({ text: `${change.symbol}${String(git[change.key])}`, tone: change.tone }))
@@ -238,6 +259,18 @@ export function detailsOf(git: GitStatus): Token[][] {
           ...(git.ahead === 0 && git.behind === 0 ? [{ text: 'up to date', tone: 'inactive' as const }] : []),
         ]
 
+  const base = git.base
+  const divergence: Token[][] = base
+    ? [
+        [
+          { text: `against ${base.name}`, tone: 'text' },
+          ...(base.ahead > 0 ? [{ text: `${base.ahead} ahead`, tone: 'success' as const }] : []),
+          ...(base.behind > 0 ? [{ text: `${base.behind} behind`, tone: 'warning' as const }] : []),
+          ...(base.ahead === 0 && base.behind === 0 ? [{ text: 'even', tone: 'inactive' as const }] : []),
+        ],
+      ]
+    : []
+
   const changes: Token[] = CHANGES.filter(change => Number(git[change.key]) > 0).map(change => ({
     text: `${String(git[change.key])} ${change.word}`,
     tone: change.tone,
@@ -247,7 +280,7 @@ export function detailsOf(git: GitStatus): Token[][] {
     changes.push({ text: `+${git.insertions} −${git.deletions} lines`, tone: 'gray' })
   }
 
-  return [names, tracking, changes.length > 0 ? changes : [{ text: '✓ clean', tone: 'success' }]]
+  return [names, tracking, ...divergence, changes.length > 0 ? changes : [{ text: '✓ clean', tone: 'success' }]]
 }
 
 // The theme key /context names each category's colour by, mapped to the band's own tones.

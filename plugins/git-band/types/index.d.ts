@@ -15,6 +15,8 @@ export type GitStatus = {
   conflicted: number
   insertions: number
   deletions: number
+  // How far the branch has gone from the repository's base branch; absent on the base itself.
+  base?: { name: string; ahead: number; behind: number } | null
 }
 
 export type ContextSlice = { name: string; tokens: number; color: string }
