@@ -329,7 +329,7 @@ export function orderAgents(agents: AgentView[]): AgentView[] {
   return [...agents].sort((a, b) => Number(isActive(b)) - Number(isActive(a)) || a.startedAt - b.startedAt)
 }
 
-export type Dashboard = { git: GitStatus; usage: UsageView | null; agents: AgentView[]; now: number; hue?: Tone }
+export type Dashboard = { git: GitStatus; usage: UsageView | null; agents: AgentView[]; now: number; hue?: Tone; activity?: Item[] }
 
 export const agentTime = (agent: AgentView, now: number): string => elapsed((agent.endedAt ?? now) - agent.startedAt)
 
@@ -362,7 +362,11 @@ export function agoChangesIn(ms: number): number {
 
 // One thing a row says: an optional icon, then words. A chip item sets its icon and first word on a solid pill of
 // the chip's tone.
-export type Item = { icon?: { name: Icon; tone: Tone }; tokens: Token[]; chip?: Tone }
+// `brief` is what an activity item says where room is short, beside its icon.
+export type Item = { icon?: { name: Icon; tone: Tone }; tokens: Token[]; chip?: Tone; topic?: SinceTopic; brief?: string }
+
+// What an activity item stands for, which picks the list its hover card shows.
+export type SinceTopic = 'files' | 'tests' | 'commits' | 'agents' | 'commands'
 
 export type Step = { position: number; total: number; text: string; states: PlanStep['status'][]; isComplete: boolean }
 
@@ -401,7 +405,7 @@ export function stepOf(plan: readonly PlanStep[]): Step | null {
 const IN_FLIGHT = { icon: 'running' as Icon, tone: 'sky' as Tone, word: 'Running in background' }
 
 // A turn that ended with work still in flight is not done: it shows what still runs, in the working colour.
-export function statusOf(turn: TurnView, prompt: string | null, now: number, inFlight: readonly string[] = []): StatusRow {
+export function statusOf(turn: TurnView, prompt: string | null, now: number, inFlight: readonly string[] = [], promptAt: number | null = null): StatusRow {
   const isInFlight = turn.phase === 'done' && inFlight.length > 0
   const phase = isInFlight ? IN_FLIGHT : PHASES[turn.phase]
   const state: Token[] = [{ text: turn.phase === 'working' ? turn.detail || phase.word : phase.word, tone: 'ink' }]
@@ -421,7 +425,8 @@ export function statusOf(turn: TurnView, prompt: string | null, now: number, inF
   const items: Item[] = [{ icon: { name: phase.icon, tone: 'ink' }, tokens: state, chip: phase.tone }]
 
   if (prompt !== null) {
-    items.push({ icon: { name: 'prompt', tone: 'gray' }, tokens: [{ text: prompt, tone: 'text' }] })
+    const when: Token[] = promptAt === null ? [] : [{ text: ago(now - promptAt), tone: 'gray' }]
+    items.push({ icon: { name: 'prompt', tone: 'gray' }, tokens: [{ text: prompt, tone: 'text' }, ...when] })
   }
 
   return { items, tone: phase.tone }
@@ -429,30 +434,31 @@ export function statusOf(turn: TurnView, prompt: string | null, now: number, inF
 
 const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? '' : 's'}`
 
-export function sinceOf(activity: ActivityView, agents: readonly AgentView[], now: number): Item[] {
-  const items: Item[] = [{ icon: { name: 'history', tone: 'gray' }, tokens: [{ text: `Since your prompt ${ago(now - (activity.since ?? now))}`, tone: 'gray' }] }]
+// What happened since your prompt, for the git row: the files edited, the last test run, the commits and the subagents
+// that finished; with none of those, how many commands ran.
+export function activityOf(activity: ActivityView, agents: readonly AgentView[]): Item[] {
+  const items: Item[] = []
   const finished = agents.filter(agent => !isActive(agent)).length
 
   if (activity.files.length > 0) {
-    items.push({ icon: { name: 'file', tone: 'warning' }, tokens: [{ text: plural(activity.files.length, 'file'), tone: 'warning' }] })
+    items.push({ icon: { name: 'file', tone: 'warning' }, tokens: [{ text: plural(activity.files.length, 'file'), tone: 'warning' }], topic: 'files', brief: String(activity.files.length) })
   }
 
   if (activity.tests !== null) {
     const tone = activity.tests.isOk ? 'success' : 'error'
-    items.push({ icon: { name: 'flask', tone }, tokens: [{ text: activity.tests.isOk ? 'tests ✓' : 'tests ✗', tone }] })
+    items.push({ icon: { name: 'flask', tone }, tokens: [{ text: activity.tests.isOk ? 'tests ✓' : 'tests ✗', tone }], topic: 'tests', brief: activity.tests.isOk ? '✓' : '✗' })
   }
 
   if (activity.commits > 0) {
-    items.push({ icon: { name: 'commit', tone: 'sky' }, tokens: [{ text: plural(activity.commits, 'commit'), tone: 'sky' }] })
+    items.push({ icon: { name: 'commit', tone: 'sky' }, tokens: [{ text: plural(activity.commits, 'commit'), tone: 'sky' }], topic: 'commits', brief: String(activity.commits) })
   }
 
   if (finished > 0) {
-    items.push({ icon: { name: 'bot', tone: 'violet' }, tokens: [{ text: `${plural(finished, 'subagent')} done`, tone: 'violet' }] })
+    items.push({ icon: { name: 'bot', tone: 'violet' }, tokens: [{ text: `${plural(finished, 'subagent')} done`, tone: 'violet' }], topic: 'agents', brief: String(finished) })
   }
 
-  if (items.length === 1) {
-    const commands = activity.commands.length
-    items.push({ tokens: [{ text: commands > 0 ? plural(commands, 'command') : 'nothing changed', tone: 'inactive' }] })
+  if (items.length === 0 && activity.commands.length > 0) {
+    items.push({ tokens: [{ text: plural(activity.commands.length, 'command'), tone: 'inactive' }], topic: 'commands' })
   }
 
   return items
@@ -465,7 +471,9 @@ export function describe(groups: Group[]): string {
 export function describeTop(board: Dashboard): string {
   const limits = board.usage?.limits ?? []
 
-  return [describe(groupsOf(board.git)), ...limits.map(limit => `${limitName(limit.kind)} ${Math.round(limit.percent)}%`)].join(' · ')
+  const activity = board.activity && board.activity.length > 0 ? [describeItems(board.activity)] : []
+
+  return [describe(groupsOf(board.git)), ...activity, ...limits.map(limit => `${limitName(limit.kind)} ${Math.round(limit.percent)}%`)].join(' · ')
 }
 
 export const describeContext = (usage: UsageView): string => `context ${usage.percent}%`
@@ -661,19 +669,44 @@ function limitsForms(limits: UsageView['limits']): LimitsForm[] {
   ]
 }
 
-type GitShape = { groups: Group[]; width: number }
+type GitShape = { groups: Group[]; activity: Item[]; width: number; gitWidth: number }
 
-function gitShapes(git: GitStatus, hue: Tone): GitShape[] {
-  const shapes: GitShape[] = []
+// The activity as icons and numbers alone, which gives way before the git row's names do.
+const briefly = (items: Item[]): Item[] =>
+  items.map(item => (item.brief === undefined ? item : { ...item, tokens: [{ text: item.brief, tone: item.tokens[0]?.tone ?? 'gray' }] }))
 
-  for (const fit of GIT_FITS) {
-    const groups = groupsOf(git, fit, hue)
-    const last = shapes.at(-1)
+const activityStart = (gitWidth: number): number => gitWidth + 4 + textWidth('│', SIZES.strong) + 6
 
-    if (last === undefined || describe(last.groups) !== describe(groups)) {
-      shapes.push({ groups, width: drawGitRow(groups, []) })
-    }
+// What happened since your prompt, after the git row's own groups past a divider.
+function drawActivity(items: Item[], gitWidth: number, parts: string[]): number {
+  if (items.length === 0) {
+    return gitWidth
   }
+
+  const drawn: string[] = []
+  const end = drawItems(items, drawn)
+  parts.push(text('│', gitWidth + 4, 15, 'line', 'strong'), `<g transform="translate(${activityStart(gitWidth)} 0)">${drawn.join('')}</g>`)
+
+  return activityStart(gitWidth) + end
+}
+
+// The widest git row with the activity in words, then with the activity brief, then narrower git rows.
+function gitShapes(git: GitStatus, hue: Tone, activity: Item[]): GitShape[] {
+  const shapes: GitShape[] = []
+  const brief = briefly(activity)
+
+  GIT_FITS.forEach((fit, index) => {
+    const groups = groupsOf(git, fit, hue)
+    const gitWidth = drawGitRow(groups, [])
+
+    for (const shown of index === 0 ? [activity, brief] : [brief]) {
+      const last = shapes.at(-1)
+
+      if (last === undefined || describe(last.groups) !== describe(groups) || describeItems(last.activity) !== describeItems(shown)) {
+        shapes.push({ groups, activity: shown, gitWidth, width: drawActivity(shown, gitWidth, []) })
+      }
+    }
+  })
 
   return shapes
 }
@@ -694,9 +727,12 @@ function shapeRange(shapes: GitShape[], index: number, form: LimitsForm): Range 
 // is drawn, and media queries on the image's own width show the one that fits, so no estimate of the band's width
 // decides what shows; the estimate only picks what shows where media queries do not apply. The git row is also
 // clipped to the room the limits leave it.
-export function drawTop(board: Dashboard, guess: number): Image {
+// `activityAt` and `activitySpans` are where the activity and each of its items sit in the shape the estimate picks, for
+// hover areas laid over them.
+export function drawTop(board: Dashboard, guess: number): Image & { activityAt: number; activitySpans: { start: number; end: number }[] } {
   const limits = board.usage?.limits ?? []
-  const shapes = gitShapes(board.git, board.hue ?? sessionHue(board.git))
+  const activity = board.activity ?? []
+  const shapes = gitShapes(board.git, board.hue ?? sessionHue(board.git), activity)
   const forms = limitsForms(limits)
   const guessForm = forms.find(form => contains(form.range, guess)) ?? forms[forms.length - 1]
   const rules: string[] = []
@@ -722,7 +758,7 @@ export function drawTop(board: Dashboard, guess: number): Image {
   shapes.forEach((shape, index) => {
     if (shown.has(index)) {
       parts.push(`<g class="v v${index}"${index === guessShape ? '' : ' display="none"'}>`)
-      drawGitRow(shape.groups, parts)
+      drawActivity(shape.activity, drawGitRow(shape.groups, parts), parts)
       parts.push('</g>')
     }
   })
@@ -740,8 +776,11 @@ export function drawTop(board: Dashboard, guess: number): Image {
   }
 
   parts.push(atRightEdge(right.join(''), ROW))
+  const picked = shapes[guessShape] ?? shapes.at(-1)
+  const at = activityStart(picked?.gitWidth ?? 0)
+  const spans = itemSpans(picked?.activity ?? []).map(span => ({ start: at + span.start, end: at + span.end }))
 
-  return wrap(parts, ROW, rules.join(''))
+  return { ...wrap(parts, ROW, rules.join('')), activityAt: at, activitySpans: spans }
 }
 
 const CONTEXT_TOP = 4
@@ -1016,25 +1055,14 @@ export function planText(step: Step, cells: number): string {
   return `${'█'.repeat(filled)}${'░'.repeat(cells - filled)} ${done}/${step.total}`
 }
 
-// An item that would run past the band's edge goes whole, with every item after it.
-export function drawSince(items: Item[]): Image {
-  const parts: string[] = []
-  const rules: string[] = []
-  let drawn: string[] = []
-
-  items.forEach((_, index) => {
-    const upTo: string[] = []
-    const end = drawItems(items.slice(0, index + 1), upTo)
-    parts.push(`<g class="i${index}">`, ...upTo.slice(drawn.length), '</g>')
-    drawn = upTo
-
-    if (index > 0) {
-      rules.push(`@media (max-width:${(end - 0.01).toFixed(2)}px){.i${index}{display:none}}`)
-    }
-  })
-
-  return wrap(parts, ROW, rules.join(''))
+// Where each item of a row starts and ends, in pixels from its left edge, as drawItems lays them out.
+export function itemSpans(items: Item[]): { start: number; end: number }[] {
+  return items.map((_, index) => ({
+    start: index === 0 ? 0 : drawItems(items.slice(0, index), []) + 14,
+    end: drawItems(items.slice(0, index + 1), []),
+  }))
 }
+
 
 const STRIPE = 3
 

@@ -581,7 +581,7 @@ test('hovering the git row shows its names whole, the upstream and the changes i
   await start($, on)
 
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  const card = findElement(await ui.drawn(), element => element.type === 'Box' && element.props?.position === 'absolute')
+  const card = findElement(await ui.drawn(), element => element.type === 'Box' && element.props?.position === 'absolute' && element.props?.display === 'none')
   const has = async (whole: string) => (await ui.find({ type: 'Text', text: new RegExp(`^${whole.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}$`) })) !== undefined
 
   expect(card?.props?.display).toBe('none')
@@ -795,7 +795,7 @@ test('tool calls read as what the session is doing, and test commands are recogn
   expect(ago(3 * 3_600_000)).toBe('3 h ago')
 })
 
-test('since your prompt counts the files, tests and commits, and its hover card lists them', async ($, on) => {
+test('what happened since your prompt sits on the git row, each item with its own hover card', async ($, on) => {
   fakeGit(on, MAIN_LAYOUT, CLEAN)
   fakeTools(on, /fail/)
   const clock = await start($, on)
@@ -803,7 +803,7 @@ test('since your prompt counts the files, tests and commits, and its hover card 
 
   await $.prompt.submit({ text: 'Fix the nav' } as never)
   await clock.settle()
-  expect(await shown(ui)).toContain('Since your prompt just now · nothing changed')
+  expect(await shown(ui)).toContain('Ready · Fix the nav just now · repo my-app · branch main · changes ✓ clean')
 
   await $.tool.call({ tool: 'Edit', file_path: 'C:/code/my-app/src/nav.ts', old_string: 'a', new_string: 'b' } as never)
   await $.tool.call({ tool: 'Edit', file_path: 'C:/code/my-app/src/nav.ts', old_string: 'b', new_string: 'c' } as never)
@@ -811,19 +811,32 @@ test('since your prompt counts the files, tests and commits, and its hover card 
   await $.tool.call({ tool: 'Bash', command: 'npm test' } as never)
   await $.tool.call({ tool: 'Bash', command: 'git commit -m "Fix the nav"' } as never)
   await clock.settle()
-  expect(await shown(ui)).toContain('Since your prompt just now · 2 files · tests ✓ · 1 commit')
+  expect(await shown(ui)).toContain('changes ✓ clean · 2 files · tests ✓ · 1 commit')
+  expect(await shown(ui)).not.toContain('Since your prompt')
 
   const has = async (text: string) => (await ui.find({ type: 'Text', text })) !== undefined
   expect(await has('src/nav.ts')).toBe(true)
   expect(await has('  2 edits')).toBe(true)
   expect(await has('npm test')).toBe(true)
 
+  // Each item has its own card with its own list: the files' card holds no command, the tests' card no file.
+  const drawn = await ui.drawn()
+  const card = (topic: string) => JSON.stringify(findElement(drawn, element => element.type === 'Box' && element.props?.key === `since:${topic}`) ?? null)
+  expect(card('files')).toContain('src/nav.ts')
+  expect(card('files')).not.toContain('npm test')
+  expect(card('tests')).toContain('npm test')
+  expect(card('tests')).not.toContain('git commit')
+  expect(card('tests')).not.toContain('src/nav.ts')
+  expect(card('commits')).toContain('git commit')
+  expect(card('commits')).not.toContain('npm test')
+  expect(findElement(drawn, element => element.props?.key === 'since:files')?.props?.left).toBeGreaterThan(0)
+
   await $.tool.call({ tool: 'Bash', command: 'npm test -- fail' } as never)
   await clock.settle()
   expect(await shown(ui)).toContain('tests ✗')
 
   await clock.advance(14 * 60_000)
-  expect(await shown(ui)).toContain('Since your prompt 14 m ago')
+  expect(await shown(ui)).toContain('Fix the nav 14 m ago')
   await ui.unmount()
 })
 

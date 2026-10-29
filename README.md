@@ -13,11 +13,11 @@ Mods need Claude Code 2.1.287 or later.
 
 While the session works, with subagents running:
 
-![git-band while it runs tests: the state chip and the latest prompt, the plan's progress bar, what changed since the prompt, the git row with the plan limits, the context bar and five subagent cards](plugins/git-band/docs/dashboard-agents.png)
+![git-band while it runs tests: the state chip and the latest prompt, the plan's progress bar, the git row with what changed since the prompt and the plan limits, the context bar and five subagent cards](plugins/git-band/docs/dashboard-agents.png)
 
 Waiting for you:
 
-![git-band waiting for an answer: an amber chip with the question, then what changed since the prompt, the git row and the context bar](plugins/git-band/docs/dashboard-waiting.png)
+![git-band waiting for an answer: an amber chip with the question, the plan, the git row with what changed since the prompt, and the context bar](plugins/git-band/docs/dashboard-waiting.png)
 
 Five sessions, each in a worktree with a colour of its own:
 

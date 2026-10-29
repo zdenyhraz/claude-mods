@@ -1,10 +1,11 @@
 import { atom, read, update } from 'claude-code'
 import type { Color, EngineInterface, ProcessRunResult, Register, RenderElement, RenderNode, SessionContextUsage, SessionRateLimit, Timer, ToolCallResult } from 'claude-code'
 
-import type { ActivityView, AgentView, GitStatus, TurnPhase, UsageView } from '../types'
+import type { ActivityView, AgentView, CommandRun, GitStatus, TurnPhase, UsageView } from '../types'
 import { parseBranch, parseFiles, parseLayout, parseShortstat, repoName, worktreeName } from './git'
 import type { Layout } from './git'
 import {
+  activityOf,
   agentTime,
   agoChangesIn,
   describeAgents,
@@ -17,7 +18,6 @@ import {
   drawAgents,
   drawContext,
   drawPlan,
-  drawSince,
   drawStatus,
   drawStripe,
   drawTop,
@@ -29,7 +29,6 @@ import {
   orderAgents,
   planText,
   sessionHue,
-  sinceOf,
   sliceTones,
   stateOf,
   statusOf,
@@ -39,7 +38,7 @@ import {
   WORKTREE_HUES,
 } from './look'
 import type { CompactMode } from './compact-button'
-import type { Dashboard, Icon, Image, Item, Tone } from './look'
+import type { Dashboard, Icon, Image, Item, SinceTopic, Tone } from './look'
 import {
   NO_ACTIVITY,
   applyPlanUpdate,
@@ -47,7 +46,9 @@ import {
   describeTool,
   editedPath,
   finishedTasks,
+  isCommit,
   isOwnPrompt,
+  isTestCommand,
   lastPrompt,
   pickHue,
   promptLine,
@@ -124,11 +125,11 @@ const COMPACT_COLUMNS = 9
 // shows changed. A resize alone keeps the git and context images, which lay themselves out at the new width.
 const cache = new Map<string, { key: string; image: Image }>()
 
-function cachedImage(row: string, key: string, draw: () => Image): Image {
+function cachedImage<T extends Image>(row: string, key: string, draw: () => T): T {
   const hit = cache.get(row)
 
   if (hit?.key === key) {
-    return hit.image
+    return hit.image as T
   }
 
   const image = draw()
@@ -364,35 +365,47 @@ const MAX_CARD_FILES = 6
 
 const heading = (text: string): CardEntry => ({ text, note: '', mark: '', tone: 'gray', isHeading: true })
 
-// The since row's hover card: the files edited, the commands run and the subagents that finished.
-function sinceDetails(since: ActivityView, list: readonly AgentView[], now: number): CardEntry[] {
-  const entries: CardEntry[] = []
-  const finished = orderAgents([...list]).filter(agent => !isActive(agent))
-
-  if (since.files.length > 0) {
-    entries.push(heading(`Edited · ${since.files.length} files`))
-    since.files.slice(0, MAX_CARD_FILES).forEach(file => entries.push({ text: file.path, note: `${file.edits} edit${file.edits === 1 ? '' : 's'}`, mark: '✎', tone: 'warning', isHeading: false }))
-
-    if (since.files.length > MAX_CARD_FILES) {
-      entries.push({ text: `and ${since.files.length - MAX_CARD_FILES} more`, note: '', mark: '', tone: 'gray', isHeading: false })
-    }
+function commandCard(title: string, commands: readonly CommandRun[]): CardEntry[] {
+  if (commands.length === 0) {
+    return []
   }
 
-  if (since.commands.length > 0) {
-    entries.push(heading('Ran'))
-    since.commands.forEach(command =>
-      entries.push({ text: command.text, note: `${(command.ms / 1000).toFixed(1)} s`, mark: command.isOk ? '✓' : '✕', tone: command.isOk ? 'success' : 'error', isHeading: false }),
-    )
+  return [
+    heading(title),
+    ...commands.map(command => ({ text: command.text, note: `${(command.ms / 1000).toFixed(1)} s`, mark: command.isOk ? '✓' : '✕', tone: (command.isOk ? 'success' : 'error') as Tone, isHeading: false })),
+  ]
+}
+
+// The hover card of one item of the since row: its own list alone. The time and a lone command count list what ran.
+function sinceCard(topic: SinceTopic, since: ActivityView, list: readonly AgentView[], now: number): CardEntry[] {
+  if (topic === 'files') {
+    const more = since.files.length > MAX_CARD_FILES ? [{ text: `and ${since.files.length - MAX_CARD_FILES} more`, note: '', mark: '', tone: 'gray' as Tone, isHeading: false }] : []
+
+    return [
+      heading(`Edited · ${since.files.length} files`),
+      ...since.files.slice(0, MAX_CARD_FILES).map(file => ({ text: file.path, note: `${file.edits} edit${file.edits === 1 ? '' : 's'}`, mark: '✎', tone: 'warning' as Tone, isHeading: false })),
+      ...more,
+    ]
   }
 
-  if (finished.length > 0) {
-    entries.push(heading('Subagents'))
-    finished.forEach(agent =>
-      entries.push({ text: agent.name, note: `${agentTime(agent, now)} · ${agent.tools} tools`, mark: stateOf(agent.status).glyph, tone: stateOf(agent.status).tone, isHeading: false }),
-    )
+  if (topic === 'agents') {
+    const finished = orderAgents([...list]).filter(agent => !isActive(agent))
+
+    return [
+      heading('Subagents'),
+      ...finished.map(agent => ({ text: agent.name, note: `${agentTime(agent, now)} · ${agent.tools} tools`, mark: stateOf(agent.status).glyph, tone: stateOf(agent.status).tone, isHeading: false })),
+    ]
   }
 
-  return entries
+  if (topic === 'tests') {
+    return commandCard('Tests', since.commands.filter(command => isTestCommand(command.text)))
+  }
+
+  if (topic === 'commits') {
+    return commandCard('Commits', since.commands.filter(command => isCommit(command.text)))
+  }
+
+  return commandCard('Ran', since.commands)
 }
 
 async function setTurn($: EngineInterface, phase: TurnPhase, detail: string): Promise<void> {
@@ -746,9 +759,11 @@ export const register: Register = on => {
     const step = stepOf(planNow)
     const promptShown = promptNow === null ? null : promptLine(promptNow)
     const inFlight = [...(await read($, background)).map(task => task.label), ...board.agents.filter(agent => ['pending', 'running', 'waiting'].includes(agent.status)).map(agent => agent.name)]
-    const statusRow = turnNow.phase !== 'idle' || promptShown !== null || step !== null ? statusOf(turnNow, promptShown, board.now, inFlight) : null
+    const statusRow =
+      turnNow.phase !== 'idle' || promptShown !== null || step !== null ? statusOf(turnNow, promptShown, board.now, inFlight, activityNow.since) : null
     const isWorking = turnNow.phase === 'working'
-    const since = activityNow.since === null ? null : sinceOf(activityNow, board.agents, board.now)
+    const activityItems = activityNow.since === null ? [] : activityOf(activityNow, board.agents)
+    board.activity = activityItems
     const shownTimes = [...(['idle', 'working'].includes(turnNow.phase) ? [] : [turnNow.at]), ...(activityNow.since === null ? [] : [activityNow.since])]
     redrawWhenTimesChange($, board.now, shownTimes)
     const { Box, Text } = $.ui.resolve(e)
@@ -788,12 +803,16 @@ export const register: Register = on => {
               {!step.isComplete && word(`Step ${step.position} · ${step.text}`, 'text')}
             </Box>
           )}
-          {since && line(since)}
           <Box flexDirection="row" columnGap="md" overflow="hidden">
             {groupsOf(board.git, undefined, board.hue).map(group => (
               <Box key={group.key} flexDirection="row" columnGap="sm" flexShrink={group.key === 'changes' ? 0 : 1}>
                 {group.icon && GLYPHS[group.icon.name] && word(GLYPHS[group.icon.name] ?? '', group.icon.tone)}
                 {group.tokens.map(token => word(token.text, token.tone))}
+              </Box>
+            ))}
+            {activityItems.map(item => (
+              <Box key={item.topic} flexDirection="row" columnGap="sm" flexShrink={1}>
+                {item.tokens.map(token => word(token.text, token.tone))}
               </Box>
             ))}
             {board.usage?.limits.map(limit => (
@@ -828,10 +847,8 @@ export const register: Register = on => {
       const statusImage = statusRow ? cachedImage('status', `${Math.floor(guess)} ${statusAlt}`, () => drawStatus(statusRow, guess)) : null
       const planAlt = step ? describePlan(step) : ''
       const planImage = step ? cachedImage('plan', `${Math.floor(guess)} ${isWorking} ${planAlt}`, () => drawPlan(step, guess, isWorking)) : null
-      const sinceAlt = since ? describeItems(since) : ''
-      const sinceImage = since ? cachedImage('since', sinceAlt, () => drawSince(since)) : null
       const topAlt = describeTop(board)
-      const top = cachedImage('top', `${tint} ${topAlt}`, () => drawTop(board, guess))
+      const top = cachedImage('top', `${Math.floor(guess)} ${tint} ${topAlt}`, () => drawTop(board, guess))
       const usageNow = board.usage
       const contextAlt = usageNow ? describeContext(usageNow) : ''
       const context = usageNow ? cachedImage('context', contextAlt, () => drawContext(usageNow, guess - COMPACT_COLUMNS * PX_PER_COLUMN)) : null
@@ -839,9 +856,30 @@ export const register: Register = on => {
       const cards = board.agents.length > 0 ? cachedImage('agents', `${Math.floor(guess)} ${agentsAlt}`, () => drawAgents(board.agents, guess, board.now)) : null
       const details = detailsOf(board.git)
       const detailsWidth = Math.max(...details.map(line => line.reduce((sum, token) => sum + token.text.length + 3, 0)))
-      const sinceCard = sinceDetails(activityNow, board.agents, board.now)
-      const sinceWidth = Math.max(...sinceCard.map(entry => entry.text.length + entry.note.length + 4))
-      const rowsHeight = [statusImage, planImage, sinceImage, top, context, cards].reduce((sum, image) => sum + (image?.height ?? 0), 0)
+      // The git row's names and each activity item have a hover area of their own over their words, with their own card.
+      const namesColumns = Math.max(2, Math.floor(top.activityAt / PX_PER_COLUMN) - 1)
+      const activityCards = activityItems.flatMap((item, index) => {
+        const span = top.activitySpans[index]
+        const entries = item.topic === undefined ? [] : sinceCard(item.topic, activityNow, board.agents, board.now)
+
+        if (span === undefined || entries.length === 0 || activityItems.length === 0) {
+          return []
+        }
+
+        const left = Math.floor(span.start / PX_PER_COLUMN)
+        const width = Math.max(...entries.map(entry => entry.text.length + entry.note.length + 4))
+
+        return [
+          {
+            key: `since:${item.topic}`,
+            left,
+            cover: Math.max(2, Math.ceil(span.end / PX_PER_COLUMN) - left),
+            entries,
+            width: Math.max(20, Math.min(width, e.props.bodyColumns - left)),
+          },
+        ]
+      })
+      const rowsHeight = [statusImage, planImage, top, context, cards].reduce((sum, image) => sum + (image?.height ?? 0), 0)
       const stripe = drawStripe(tint, rowsHeight)
 
       // An Svg given no width fills the column Box it is in, so each image is laid out at the band's real width.
@@ -863,43 +901,48 @@ export const register: Register = on => {
             </Box>
           )}
           {planImage && <Svg source={planImage.source} alt={planAlt} height={planImage.height} />}
-          {sinceImage && (
-            <Box key="since" flexDirection="column" width="100%">
-              <Svg source={sinceImage.source} alt={sinceAlt} height={sinceImage.height} />
-              {sinceCard.length > 0 && (
-                <Box position="absolute" top={0} left={0} width={Math.min(e.props.bodyColumns, sinceWidth)} display="none" hover={{ display: 'flex' }} flexDirection="column">
-                  {sinceCard.map(entry =>
-                    entry.isHeading ? (
-                      <Text dimColor bold>
-                        {entry.text}
-                      </Text>
-                    ) : (
-                      <Text wrap="truncate-end">
-                        <Text color={THEME_KEYS[entry.tone]}>{entry.mark ? `${entry.mark} ` : ''}</Text>
-                        <Text>{entry.text}</Text>
-                        <Text dimColor>{entry.note ? `  ${entry.note}` : ''}</Text>
-                      </Text>
-                    ),
-                  )}
-                </Box>
-              )}
-            </Box>
-          )}
-          <Box key="git" flexDirection="column" width="100%">
+          <Box flexDirection="column" width="100%">
             <Svg source={top.source} alt={topAlt} height={top.height} />
-            <Box position="absolute" top={0} left={0} width={Math.min(e.props.bodyColumns, detailsWidth)} display="none" hover={{ display: 'flex' }} flexDirection="column">
-              {details.map((line, index) => (
-                <Text wrap="truncate-end">
-                  {line.map((token, at) => [
-                    at > 0 ? <Text dimColor>{' · '}</Text> : '',
-                    <Text color={THEME_KEYS[token.tone]} bold={index === 0}>
-                      {token.text}
-                    </Text>,
-                  ])}
-                </Text>
+            <Box key="git" position="absolute" top={0} left={0} width={activityItems.length > 0 ? namesColumns : '100%'} height="100%">
+              <Box width="100%" height="100%">
+                <Text> </Text>
+              </Box>
+              <Box position="absolute" top={0} left={0} width={Math.min(e.props.bodyColumns, detailsWidth)} display="none" hover={{ display: 'flex' }} flexDirection="column">
+                {details.map((line, index) => (
+                  <Text wrap="truncate-end">
+                    {line.map((token, at) => [
+                      at > 0 ? <Text dimColor>{' · '}</Text> : '',
+                      <Text color={THEME_KEYS[token.tone]} bold={index === 0}>
+                        {token.text}
+                      </Text>,
+                    ])}
+                  </Text>
+                ))}
+              </Box>
+            </Box>
+            {activityCards.map(card => (
+                <Box key={card.key} position="absolute" top={0} left={card.left} width={card.cover} height="100%">
+                  <Box width="100%" height="100%">
+                    <Text> </Text>
+                  </Box>
+                  <Box position="absolute" top={0} left={0} width={card.width} display="none" hover={{ display: 'flex' }} flexDirection="column">
+                    {card.entries.map(entry =>
+                      entry.isHeading ? (
+                        <Text dimColor bold>
+                          {entry.text}
+                        </Text>
+                      ) : (
+                        <Text wrap="truncate-end">
+                          <Text color={THEME_KEYS[entry.tone]}>{entry.mark ? `${entry.mark} ` : ''}</Text>
+                          <Text>{entry.text}</Text>
+                          <Text dimColor>{entry.note ? `  ${entry.note}` : ''}</Text>
+                        </Text>
+                      ),
+                    )}
+                  </Box>
+                </Box>
               ))}
             </Box>
-          </Box>
           {context && (
             <Box flexDirection="row" alignItems="center" width="100%">
               <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>

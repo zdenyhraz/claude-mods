@@ -10,20 +10,17 @@ sessions. Screenshots are in the [repository README](../../README.md#git-band).
      and how long ago; `Ready` before the first turn. A turn that ended with work still going (a command sent
      to the background, a monitor, a subagent) shows `Running in background` in blue and what still runs,
      until it finishes or is stopped.
-   - **Prompt**: the first line of your latest prompt, so what you last asked is in view without scrolling
-     up; on the desktop app, hovering the row shows the whole prompt. Only what you wrote counts, at the prompt, from your phone or through a button of yours; not slash
-     commands, notifications or other sessions' messages. Loaded partway through a session, the band reads
-     it from the transcript.
+   - **Prompt**: the first line of your latest prompt and how long ago you wrote it, so what you last asked is
+     in view without scrolling up; on the desktop app, hovering the row shows the whole prompt. Only what you
+     wrote counts, at the prompt, from your phone or through a button of yours; not slash commands,
+     notifications or other sessions' messages. Loaded partway through a session, the band reads it from the
+     transcript.
    - **Plan**, on a row of its own once the task list has two steps or more: a thick bar across the band
      with the step written inside it (`Step 3 · Run the test suite`) over a fill of the steps done and a
      fainter one for the step under way, then how much is done and the steps done (`40%  2/5`). A light
      passes along the fill while the session works; a finished plan is green and says `All 5 steps done`.
      A prompt you write between turns clears it until the session makes a new task list.
-2. **Since your prompt**, after your first prompt: how long ago you last wrote, then what happened since,
-   subagents' work included: the files edited, the last test run (`tests ✓` or `tests ✗`), the commits and
-   the subagents that finished; or `nothing changed`. On the desktop app, hovering it lists the files with
-   their edits, the commands run with their results and times, and the subagents.
-3. **Git**, then the plan limits on the right:
+2. **Git**, then the plan limits on the right:
    - **Repo** (blue): a book icon and the repository's name.
    - **Worktree**, only in a linked worktree: a fork icon and its name, in the worktree's colour.
    - **Branch** (orange): its name, or the short commit id when detached; then `↑n` / `↓n` ahead of and
@@ -31,16 +28,22 @@ sessions. Screenshots are in the [repository README](../../README.md#git-band).
    - **Changes**: a count for each kind present, each file counted once: `!` conflicted (red), `+` added
      (green), `~` modified (amber), `−` deleted (red), `→` renamed (blue), `?` untracked (teal), `●` staged
      (blue), then `+lines −lines` against `HEAD`; or `✓ clean`.
+   - **Since your prompt**, past a divider, subagents' work included: the files edited, the last test run
+     (`tests ✓` or `tests ✗`), the commits and the subagents that finished; with none of those, how many
+     commands ran. Where room is short they keep their icons and numbers alone (`3`, `✓`) before the names
+     before them are cut.
    - **Limits**: a small ring per plan window, `5h` and `wk` written inside, filling green under 50%, amber
      from 50% and red from 80%, with the percentage beside it. They appear after the session's first reply,
      on a Pro or Max plan.
 
-   On the desktop app, hovering the row shows a card with the names whole, the upstream with how far ahead
-   and behind it is, and each kind of change in words.
-4. **Context**: a bar of the context window, each category in its own colour, then the percentage used. On
+   On the desktop app, hovering the names shows a card with them whole, the upstream with how far ahead and
+   behind it is, and each kind of change in words; hovering one of the since-your-prompt items lists what it
+   counts and nothing else: the files with their edits, the test runs, the commits, the subagents or the
+   commands with their results and times.
+3. **Context**: a bar of the context window, each category in its own colour, then the percentage used. On
    the desktop app a yellow `compact` at the end of the row runs `/compact`; clicked during a turn, it runs
    once the turn ends.
-5. **Subagents**, only while there are any: a card per agent with its state (running, waiting, queued,
+4. **Subagents**, only while there are any: a card per agent with its state (running, waiting, queued,
    done, failed, stopped) in its own colour, its time, its task and type, and how many tools it has called.
    Active agents come first; finished ones stay until the next prompt. Ten cards at most, the last saying
    how many more.
