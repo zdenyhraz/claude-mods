@@ -20,8 +20,9 @@ python claude-mods/setup.py
 
 `setup.py` makes `~/.claude/CLAUDE.md` import `user/CLAUDE.md`, so the guidance applies in every
 session, worktrees included. It also adds the clone as the `claude-mods` marketplace and installs its
-mods at user scope, then warns if git has no global `user.name` or `user.email`. Where `claude` is
-not on `PATH`, as with the desktop app alone, pass `--claude <path to claude>`. Running it again is safe.
+mods at user scope, then warns if git has no global `user.name` or `user.email`. It runs the `claude`
+on `PATH`, else the newest one the desktop app keeps for itself, so the desktop app alone is enough;
+`--claude <path>` picks another. Running it again is safe.
 
 To update, `git pull` in the clone: new sessions read the new guidance, and `/reload-plugins` loads the
 new mods into a running one.
