@@ -55,7 +55,6 @@ import {
   promptText,
   shortPath,
   startedTask,
-  tasksOf,
   todosOf,
   waitsFor,
   withCommand,
@@ -275,6 +274,8 @@ let isRefreshing = false
 let isQueued = false
 let isScheduled = false
 let isAwaitingPerson = false
+const EDIT_REFRESH_MS = 5_000
+let editRefreshedAt = 0
 let lastJson = ''
 
 async function refresh($: EngineInterface): Promise<void> {
@@ -317,17 +318,6 @@ function scheduleRefresh($: EngineInterface): void {
     isScheduled = false
     void refresh($)
   })
-}
-
-// Every command that commits, checks out, stages, resets, merges, rebases or fetches writes one of these.
-async function gitFilesToWatch($: EngineInterface): Promise<string[]> {
-  const layout = await readLayout($)
-
-  if (!layout) {
-    return []
-  }
-
-  return [`${layout.gitDir}/HEAD`, `${layout.gitDir}/index`, `${layout.gitDir}/logs/HEAD`, `${layout.commonDir}/FETCH_HEAD`]
 }
 
 // The breakdown is estimated locally ('summary'): no request is sent for it.
@@ -656,33 +646,6 @@ export const register: Register = on => {
     return result
   })
 
-  on('classic.SessionStart', async ($, e, next) => {
-    const result = await next(e)
-    const paths = await gitFilesToWatch($)
-
-    return paths.length === 0 ? result : { ...result, watchPaths: [...(result.watchPaths ?? []), ...paths] }
-  })
-
-  // At the end of a turn the engine knows exactly what is still in flight; between turns the tool calls and the task
-  // notifications keep the list.
-  on('classic.Stop', async ($, e, next) => {
-    const result = await next(e)
-
-    if (Array.isArray(e.background_tasks)) {
-      const tasks = tasksOf(e.background_tasks)
-      await update($, background, () => tasks).catch(() => undefined)
-    }
-
-    return result
-  })
-
-  on('classic.FileChanged', async ($, e, next) => {
-    const result = await next(e)
-    scheduleRefresh($)
-
-    return result
-  })
-
   on('classic.CwdChanged', async ($, e, next) => {
     const result = await next(e)
     scheduleRefresh($)
@@ -690,12 +653,15 @@ export const register: Register = on => {
     return result
   })
 
-  // Catches edits made outside the session (an editor, a terminal) once the person is back at the prompt.
+  // Catches changes made outside the session (an editor, a terminal) while the person types at the prompt, at most
+  // every EDIT_REFRESH_MS: a mod cannot watch git's files itself.
   on('prompt.edit', async ($, e, next) => {
     const result = await next(e)
+    const now = await $.clock.now()
 
-    if (isAwaitingPerson) {
+    if (isAwaitingPerson || now - editRefreshedAt >= EDIT_REFRESH_MS) {
       isAwaitingPerson = false
+      editRefreshedAt = now
       scheduleRefresh($)
     }
 
@@ -802,9 +768,11 @@ export const register: Register = on => {
     }
 
     const board: Dashboard = { git: gitStatus, usage: await read($, usage), agents: await read($, agents), now: await $.clock.now() }
-    const [turnNow, promptNow, planNow, activityNow, claimed] = await Promise.all([read($, turn), read($, latestPrompt), read($, plan), read($, activity), read($, hue)])
+    const [turnNow, promptHeld, planNow, activityNow, claimed] = await Promise.all([read($, turn), read($, latestPrompt), read($, plan), read($, activity), read($, hue)])
     board.hue = WORKTREE_HUES.find(tone => tone === claimed) ?? sessionHue(board.git)
     const step = stepOf(planNow)
+    // Cleaned again here, as a prompt kept by an earlier version may still hold a reminder block.
+    const promptNow = promptHeld === null ? null : promptText(promptHeld)
     const promptShown = promptNow === null ? null : promptLine(promptNow)
     const inFlight = [...(await read($, background)).map(task => task.label), ...board.agents.filter(agent => ['pending', 'running', 'waiting'].includes(agent.status)).map(agent => agent.name)]
     const statusRow =

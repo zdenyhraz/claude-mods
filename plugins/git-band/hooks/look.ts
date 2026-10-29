@@ -1035,57 +1035,76 @@ export function drawStatus(row: StatusRow, guess: number): Image {
 
 const PLAN_ROW = 28
 const PLAN_BAR = 24
-const PLAN_INSET = 12
-const SHEEN = 140
+const PLAN_INSET = 10
+const STRIPES = 16
 
-// A light passing along the fill while the session works.
-const SHEEN_RULES =
-  `.sheen{animation:sheen 2.6s ease-in-out infinite}@keyframes sheen{from{x:-${SHEEN}px}to{x:100%}}` +
-  '@media (prefers-reduced-motion: reduce){.sheen{animation:none;display:none}}'
+// The step under way, else the next one; null once every step is done.
+const shownStep = (step: Step): number | null => {
+  const current = step.states.indexOf('in_progress')
+  const next = step.states.indexOf('pending')
 
-// The plan as one thick bar across the band, the step written inside it over a fill of the steps done and a fainter one
-// for the step under way; how much is done and the step's number at the right.
+  return current >= 0 ? current : next >= 0 ? next : null
+}
+
+// The plan as one thick bar across the band: the steps done in green, the step under way a striped blue span with its
+// number and words that stretches to fit them, what is left dark; the step's number of all at the right. The stripes
+// move while the session works.
 export function drawPlan(step: Step, guess: number, isWorking: boolean): Image {
-  const tone: Tone = step.isComplete ? 'success' : 'sky'
+  const index = shownStep(step)
   const completed = step.states.filter(state => state === 'completed').length
-  const done = completed / step.total
-  const reached = step.isComplete ? 1 : Math.max(done, step.position / step.total)
-  const percent = `${Math.round(done * 100)}%`
-  const count = `${completed}/${step.total}`
+  const count = `${index === null ? step.total : index + 1}/${step.total}`
   const countWidth = textWidth(count, SIZES.strong)
-  const right = countWidth + 10 + textWidth(percent, SIZES.strong) + 14
+  const right = countWidth + 14
   const barWidth = Math.max(60, guess - right)
-  const words = step.isComplete ? `All ${step.total} steps done` : `Step ${step.position} · ${step.text}`
-  const label = fit(words, SIZES.strong, barWidth - 2 * PLAN_INSET)
   const y = (PLAN_ROW - PLAN_BAR) / 2
-  const share = (fraction: number): string => `max(0px, calc((100% - ${right}px) * ${fraction.toFixed(4)}))`
-  const bar = (fraction: number, attributes: string): string =>
-    `<rect ${attributes} x="0" y="${y}" width="${(fraction * barWidth).toFixed(1)}" height="${PLAN_BAR}" style="width:${share(fraction)}"/>`
+  const room = `(100% - ${right}px)`
+  const share = (fraction: number): string => `calc(${room} * ${fraction.toFixed(4)})`
+  const at = (fraction: number, content: string, offset = 0): string =>
+    `<svg x="${(fraction * 100).toFixed(3)}%" y="0" width="1" height="${PLAN_ROW}" overflow="visible"><g transform="translate(${(offset - fraction * right).toFixed(1)} 0)">${content}</g></svg>`
   const parts = [
-    `<defs><linearGradient id="fill"><stop offset="0" stop-opacity="0.55" class="stop-${tone}"/><stop offset="1" class="stop-${tone}"/></linearGradient>`,
-    `<linearGradient id="sheen"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset="0.5" stop-color="#fff" stop-opacity="0.22"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>`,
-    `<clipPath id="plan-bar"><rect x="0" y="${y}" width="${barWidth}" height="${PLAN_BAR}" rx="8" style="width:${share(1)}"/></clipPath>`,
-    `<clipPath id="plan-done">${bar(done, '')}</clipPath></defs>`,
-    `<rect class="f-free" x="0" y="${y}" width="${barWidth}" height="${PLAN_BAR}" rx="8" style="width:${share(1)}"/>`,
-    '<g clip-path="url(#plan-bar)">',
-    bar(reached, `class="f-${tone}" opacity="0.18"`),
-    bar(done, 'fill="url(#fill)"'),
-    isWorking ? `<g clip-path="url(#plan-done)"><rect class="sheen" x="-${SHEEN}" y="${y}" width="${SHEEN}" height="${PLAN_BAR}" fill="url(#sheen)"/></g>` : '',
-    text(label, PLAN_INSET, y + 17, 'text', 'strong'),
-    '</g>',
-    atRightEdge(text(percent, -(right - 14), y + 17, 'gray', 'strong') + text(count, -countWidth, y + 17, 'text', 'strong'), PLAN_ROW),
+    `<defs><clipPath id="plan-bar"><rect x="0" y="${y}" width="${barWidth}" height="${PLAN_BAR}" rx="8" style="width:max(0px, ${share(1)})"/></clipPath>`,
+    `<pattern id="stripes" width="${STRIPES}" height="${STRIPES}" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect class="f-sky" width="${STRIPES}" height="${STRIPES}"/>`,
+    `<rect fill="#fff" opacity="0.2" width="${STRIPES / 2}" height="${STRIPES}"/>`,
+    isWorking ? `<animateTransform attributeName="patternTransform" type="translate" additive="sum" from="0 0" to="${STRIPES} 0" dur="0.9s" repeatCount="indefinite"/>` : '',
+    '</pattern></defs>',
+    `<g clip-path="url(#plan-bar)"><rect class="f-free" x="0" y="${y}" width="${barWidth}" height="${PLAN_BAR}" style="width:max(0px, ${share(1)})"/>`,
+    `<rect class="f-success" x="0" y="${y}" width="${((barWidth * completed) / step.total).toFixed(1)}" height="${PLAN_BAR}" style="width:${share(completed / step.total)}"/>`,
   ]
-  const stops = `.stop-${tone}{stop-color:${DARK[tone]}}@media (prefers-color-scheme: light){.stop-${tone}{stop-color:${LIGHT[tone]}}}`
 
-  return wrap(parts, PLAN_ROW, stops + (isWorking ? SHEEN_RULES : ''))
+  for (let done = 1; done < completed; done++) {
+    const x = (barWidth * done) / step.total - 1
+    parts.push(`<rect class="f-ink" x="${x.toFixed(1)}" y="${y}" width="2" height="${PLAN_BAR}" opacity="0.45" style="x:calc(${share(done / step.total)} - 1px)"/>`)
+  }
+
+  if (index === null) {
+    parts.push(text(fit(`All ${step.total} steps done`, SIZES.strong, barWidth - 2 * PLAN_INSET), PLAN_INSET, y + 17, 'ink', 'strong'), '</g>')
+  } else {
+    // The span starts where the steps done end and is a step wide, or as wide as its words where the bar has room.
+    const start = index / step.total
+    const words = `${index + 1} · ${step.text}`
+    const label = fit(words, SIZES.strong, Math.max(barWidth / step.total, barWidth * (1 - start)) - 2 * PLAN_INSET)
+    const span = Math.max(barWidth / step.total, Math.min(textWidth(label, SIZES.strong) + 2 * PLAN_INSET, barWidth * (1 - start)))
+    const width = `max(${share(1 / step.total)}, min(${span.toFixed(1)}px, ${share(1 - start)}))`
+    const isUnderWay = step.states[index] === 'in_progress'
+    parts.push(
+      `<rect x="${(barWidth * start).toFixed(1)}" y="${y}" width="${span.toFixed(1)}" height="${PLAN_BAR}" fill="url(#stripes)"${isUnderWay ? '' : ' opacity="0.45"'} style="x:${share(start)};width:${width}"/>`,
+      at(start, text(label, PLAN_INSET, y + 17, 'ink', 'strong')),
+      '</g>',
+    )
+  }
+
+  parts.push(atRightEdge(text(count, -countWidth, y + 17, 'text', 'strong'), PLAN_ROW))
+
+  return wrap(parts, PLAN_ROW)
 }
 
 // The plan in text, for the terminal.
 export function planText(step: Step, cells: number): string {
   const done = step.states.filter(state => state === 'completed').length
   const filled = Math.round((cells * done) / step.total)
+  const index = shownStep(step)
 
-  return `${'█'.repeat(filled)}${'░'.repeat(cells - filled)} ${done}/${step.total}`
+  return `${'█'.repeat(filled)}${'░'.repeat(cells - filled)} ${index === null ? step.total : index + 1}/${step.total}`
 }
 
 // Where each item of a row starts and ends, in pixels from its left edge, as drawItems lays them out.

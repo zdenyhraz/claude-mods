@@ -15,11 +15,11 @@ sessions. Screenshots are in the [repository README](../../README.md#git-band).
      wrote counts, at the prompt, from your phone or through a button of yours; not slash commands,
      notifications or other sessions' messages. Loaded partway through a session, the band reads it from the
      transcript.
-   - **Plan**, on a row of its own once the task list has two steps or more: a thick bar across the band
-     with the step written inside it (`Step 3 · Run the test suite`) over a fill of the steps done and a
-     fainter one for the step under way, then how much is done and the steps done (`40%  2/5`). A light
-     passes along the fill while the session works; a finished plan is green and says `All 5 steps done`.
-     A prompt you write between turns clears it until the session makes a new task list.
+   - **Plan**, on a row of its own once the task list has two steps or more: a thick bar across the band,
+     the steps done in green, the step under way a striped blue span with its number and words
+     (`3 · Run the test suite`) as wide as they need, what is left dark; the step's number of all at the
+     right (`3/5`). The stripes move while the session works; a finished plan is green throughout and says
+     `All 5 steps done`. A prompt you write between turns clears it until the session makes a new task list.
 2. **Git**, then the plan limits on the right:
    - **Repo** (blue): a book icon and the repository's name.
    - **Worktree**, only in a linked worktree: a fork icon and its name, in the worktree's colour.
@@ -73,17 +73,15 @@ Other mods' bands stay: git-band stacks above whatever they draw in the band, an
 
 ## How it stays current
 
-It runs `git` itself (`rev-parse`, `status --porcelain=v2 --branch`, `diff HEAD --shortstat`) with
-`--no-optional-locks`, so it never takes the index lock from your own git commands. It never polls: it
-refreshes only when something that can change the answer happens.
+It runs `git` itself (`rev-parse`, `status --porcelain=v2 --branch`, `diff HEAD --shortstat`, and for the
+base `symbolic-ref` and `rev-list --left-right --count`) with `--no-optional-locks`, so it never takes the
+index lock from your own git commands. It never polls: it refreshes only when something that can change the
+answer happens.
 
 - The session starts, or the mod reloads.
 - Claude runs Bash, PowerShell, Edit, Write or NotebookEdit, enters or leaves a worktree, or ends a turn.
-- One of git's own files changes: the worktree's `HEAD`, `index` and `logs/HEAD`, and the repository's
-  `FETCH_HEAD`. Every commit, checkout, stage, reset, merge, rebase, pull or fetch writes one of these, so
-  git commands you run yourself, in a terminal or an editor, show up too.
-- You start typing at the prompt after a turn, which catches files you edited outside the session without
-  staging them.
+- You type at the prompt: at once after a turn, then at most every five seconds. That is how commits, staging
+  and edits you make yourself, in a terminal or an editor, show up; a mod cannot watch git's files.
 
 A burst of these is one refresh, and the band redraws only when the answer changed. Outside a git repository
 it draws nothing. When git can't answer (a timeout, a busy index), the band keeps what it last showed.

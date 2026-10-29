@@ -3,7 +3,7 @@ import type { TestBody } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { ago, describe, drawAgents, drawContext, drawPlan, drawStatus, drawTop, groupsOf, sessionHue, shorten, sliceTones, statusOf, stepOf } from '../hooks/look'
-import { applyPlanUpdate, describeTool, isOwnPrompt, isTestCommand, lastPrompt, pickHue, withHue } from '../hooks/session'
+import { applyPlanUpdate, describeTool, isOwnPrompt, isTestCommand, lastPrompt, pickHue, promptText, withHue } from '../hooks/session'
 import { isOwnBase, parseDivergence } from '../hooks/git'
 
 type TestEngine = Parameters<TestBody>[0]
@@ -79,7 +79,6 @@ async function start($: TestEngine, on: On, drawsBeneath = false) {
   }
 
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  on('classic.FileChanged', () => ({}))
   await $.session.start({ cwd: 'C:/code/my-app', surface: 'desktop', isInteractive: true })
   await clock.settle()
 
@@ -175,7 +174,7 @@ test('outside a repository the band is left to the engine', async ($, on) => {
   await ui.unmount()
 })
 
-test("nothing refreshes on a timer, and a change to git's files does", async ($, on) => {
+test("nothing refreshes on a timer, and the end of a turn catches changes made outside the session", async ($, on) => {
   let porcelain = CLEAN
   on('process.run', (_, e) => {
     const args = e.argv.join(' ')
@@ -183,6 +182,7 @@ test("nothing refreshes on a timer, and a change to git's files does", async ($,
 
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
+  on('turn.complete', () => ({ text: '', reason: 'answer' }) as never)
   const clock = await start($, on)
 
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
@@ -192,7 +192,7 @@ test("nothing refreshes on a timer, and a change to git's files does", async ($,
   await clock.advance(120_000)
   expect(await shown(ui)).toContain('clean')
 
-  await $.classic.FileChanged({ file_path: 'C:/code/my-app/.git/index', event: 'change' })
+  await $.turn.complete(ended('t1'))
   await clock.advance(500)
 
   expect(await shown(ui)).toContain('?1')
@@ -270,14 +270,15 @@ test('a git command that fails keeps the band as it last was', async ($, on) => 
 
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
+  on('turn.complete', () => ({ text: '', reason: 'answer' }) as never)
   const clock = await start($, on)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
 
   world.fails = true
-  await $.classic.FileChanged({ file_path: 'C:/code/my-app/.git/index', event: 'change' })
+  await $.turn.complete(ended('t1'))
   await clock.advance(500)
 
-  expect(await shown(ui)).toBe('repo my-app · branch main · changes ✓ clean')
+  expect(await shown(ui)).toBe('Done just now · repo my-app · branch main · changes ✓ clean')
   await ui.unmount()
 })
 
@@ -334,21 +335,6 @@ test('starting or reloading asks for the band to be drawn again', async ($, on) 
   await start($, on)
 
   expect(asked.filter(event => event === 'ui.render').length).toBe(2)
-})
-
-test("the session watches git's own files for changes made outside it", async ($, on) => {
-  fakeGit(on, WORKTREE_LAYOUT, DIRTY)
-  on('classic.SessionStart', () => ({}))
-  await start($, on)
-
-  const result = await $.classic.SessionStart({ source: 'startup' })
-
-  expect(result.watchPaths).toEqual([
-    'C:/code/my-app/.git/worktrees/feature-x/HEAD',
-    'C:/code/my-app/.git/worktrees/feature-x/index',
-    'C:/code/my-app/.git/worktrees/feature-x/logs/HEAD',
-    'C:/code/my-app/.git/FETCH_HEAD',
-  ])
 })
 
 const SMALL_REPO = {
@@ -776,6 +762,7 @@ test('a stopped turn says so, and only what you wrote counts as your prompt', as
   await clock.settle()
   expect(await shown(ui)).toContain('Stopped just now · look at the profile first')
 
+  expect(promptText('<system-reminder>\nnotes\n</system-reminder>\nFix the nav')).toBe('Fix the nav')
   const typed = { origin: { kind: 'composer' } }
   expect(isOwnPrompt(typed)).toBe(true)
   expect(isOwnPrompt({ origin: { kind: 'auto-continuation' } })).toBe(true)
@@ -803,11 +790,13 @@ test('the plan follows the task list as a bar of its own, and a plan of one step
   expect(stepOf([{ content: 'Commit and push', status: 'completed' }])).toBeNull()
 
   const image = drawPlan(step!, 760, true)
-  expect(image.source).toContain('>Step 2 · Write the fix</text>')
-  expect(image.source).toContain('>1/3</text>')
-  expect(image.source).toContain('>33%</text>')
-  expect(image.source).toContain('@keyframes sheen')
-  expect(drawPlan(step!, 760, false).source).not.toContain('@keyframes sheen')
+  // The step under way is a striped span with its number and words, after the steps done in green; its stripes move while the session works.
+  expect(image.source).toContain('>2 · Write the fix</text>')
+  expect(image.source).toContain('>2/3</text>')
+  expect(image.source).toContain('class="f-success"')
+  expect(image.source).toContain('fill="url(#stripes)"')
+  expect(image.source).toContain('animateTransform')
+  expect(drawPlan(step!, 760, false).source).not.toContain('animateTransform')
   expect(drawStatus(statusOf({ phase: 'working', detail: 'Editing look.ts', at: 0 }, 'Fix the nav', 0), 760).source).not.toContain('2/3')
 })
 
@@ -984,7 +973,6 @@ test('a finished plan shows its full bar in green and says it is done', () => {
 
   expect(image.source).toContain('>2/2</text>')
   expect(image.source).toContain('>All 2 steps done</text>')
-  expect(image.source).toContain('>100%</text>')
   expect(image.source).toContain('class="f-success"')
   expect(image.source).not.toContain('Update the README')
 })

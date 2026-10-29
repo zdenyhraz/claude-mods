@@ -141,10 +141,12 @@ export function todosOf(args: ToolArgs): PlanStep[] {
 const MAX_PROMPT = 160
 const MAX_HELD = 4000
 const IMAGES = /\[Image[^\]]*\]/g
+// Blocks the engine wraps around a prompt (reminders, notifications), which the person never typed.
+const SYSTEM_BLOCKS = /<([a-z][\w-]*)[^>]*>[\s\S]*?<\/\1>/gi
 
-// A prompt's text without its image placeholders, as kept for the hover card; null when nothing is left.
+// A prompt's text without system blocks and image placeholders, as kept for the hover card; null when nothing is left.
 export function promptText(text: string): string | null {
-  const kept = text.replace(IMAGES, '').trim()
+  const kept = text.replace(SYSTEM_BLOCKS, '').replace(IMAGES, '').trim()
 
   if (kept === '') {
     return null
@@ -221,15 +223,8 @@ export function startedTask(tool: string, args: ToolArgs, output: unknown): Back
 // The tasks a task notification reports on.
 export const finishedTasks = (text: string): string[] => [...text.matchAll(/<task-id>\s*([^<\s]+)\s*<\/task-id>/g)].map(match => match[1] ?? '')
 
-type TaskSummary = { id: string; description?: string; command?: string; type?: string }
-
-// What the classic Stop event says is still in flight when the turn ends.
-export const tasksOf = (summaries: readonly TaskSummary[]): BackgroundTask[] =>
-  summaries.map(task => ({ id: task.id, label: labelOf(task.description || task.command || task.type || 'background task') }))
-
 type TranscriptRow = { role: string; text: string; toolResults?: readonly unknown[] }
 
-const SYSTEM_BLOCKS = /<([a-z][\w-]*)[^>]*>[\s\S]*?<\/\1>/gi
 
 // The session's latest prompt of the person's own, whole: system blocks and images stripped, a compaction's summary,
 // slash commands and notices skipped.
