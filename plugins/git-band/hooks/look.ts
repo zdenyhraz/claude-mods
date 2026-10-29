@@ -38,7 +38,8 @@ export type Icon =
   | 'bot'
   | 'base'
 export type Token = { text: string; tone: Tone }
-export type Group = { key: string; border: Tone; icon?: { name: Icon; tone: Tone }; tokens: Token[] }
+// `label` is a word before the icon, which says what the group is.
+export type Group = { key: string; border: Tone; label?: Token; icon?: { name: Icon; tone: Tone }; tokens: Token[] }
 
 // Claude Code's dark and light theme colours. An Svg is drawn as an image that cannot read the theme, so the
 // band picks between these with the prefers-color-scheme media query, which follows the app's theme.
@@ -244,7 +245,7 @@ export function groupsOf(git: GitStatus, fit: GitFit = FULL, hue: Tone = session
 export function nameGroupsOf(git: GitStatus, fit: GitFit = FULL, hue: Tone = sessionHue(git)): Group[] {
   const names = groupsOf(git, fit, hue)
     .filter(group => group.key === 'repo' || group.key === 'worktree')
-    .map(group => (group.key === 'worktree' && fit.hasLines && group.tokens.length > 0 ? { ...group, tokens: [{ text: 'worktree', tone: 'gray' as Tone }, ...group.tokens] } : group))
+    .map(group => (group.key === 'worktree' && fit.hasLines && group.tokens.length > 0 ? { ...group, label: { text: 'worktree', tone: 'gray' as Tone } } : group))
 
   if (git.worktree === null) {
     names.push({ key: 'branch', border: 'claude', icon: { name: 'branch', tone: 'claude' }, tokens: [{ text: shorten(git.branch, fit.branch), tone: 'claude' }] })
@@ -527,15 +528,8 @@ export function activityOf(activity: ActivityView, agents: readonly AgentView[])
   return items
 }
 
-// A group's key and words, the key once where the words already start with it.
 export function describe(groups: Group[]): string {
-  return groups
-    .map(group => {
-      const words = group.tokens.map(token => token.text)
-
-      return (words[0] === group.key ? words : [group.key, ...words]).join(' ')
-    })
-    .join(' · ')
+  return groups.map(group => `${group.key} ${group.tokens.map(token => token.text).join(' ')}`).join(' · ')
 }
 
 export function describeTop(board: Dashboard): string {
@@ -649,6 +643,11 @@ function drawGitRow(groups: Group[], parts: string[]): number {
       x += textWidth('│', SIZES.strong) + 6
     } else if (index > 0) {
       x += 6
+    }
+
+    if (group.label) {
+      parts.push(text(group.label.text, x, 15, group.label.tone, 'strong'))
+      x += textWidth(group.label.text, SIZES.strong) + 5
     }
 
     if (group.icon) {

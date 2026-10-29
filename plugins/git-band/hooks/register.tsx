@@ -849,6 +849,7 @@ export const register: Register = on => {
           <Box flexDirection="row" columnGap="md" overflow="hidden">
             {nameGroupsOf(board.git, undefined, board.hue).map(group => (
               <Box key={group.key} flexDirection="row" columnGap="sm" flexShrink={1}>
+                {group.label && word(group.label.text, group.label.tone)}
                 {group.icon && GLYPHS[group.icon.name] && word(GLYPHS[group.icon.name] ?? '', group.icon.tone)}
                 {group.tokens.map(token => word(token.text, token.tone))}
               </Box>

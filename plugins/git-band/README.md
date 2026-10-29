@@ -21,8 +21,8 @@ sessions. Screenshots are in the [repository README](../../README.md#git-band).
      right (`3/5`). The stripes move while the session works; a finished plan is green throughout and says
      `All 5 steps done`. A prompt you write between turns clears it until the session makes a new task list.
 2. **Git**, on two rows so names never crowd the counts:
-   - **Names**, with the plan limits on the right: the repository (blue, a book icon), then `worktree` and its name
-     in its colour (a fork icon), the word dropped where room is short; or in the main checkout the branch.
+   - **Names**, with the plan limits on the right: the repository (blue, a book icon), then `worktree`, and the fork icon
+     and its name in its colour, the word dropped where room is short; or in the main checkout the branch.
    - **Limits**: a small ring per plan window, `5h` and `wk` written inside, filling green under 50%, amber
      from 50% and red from 80%, with the percentage beside it. They appear after the session's first reply,
      on a Pro or Max plan.
