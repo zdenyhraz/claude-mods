@@ -138,11 +138,13 @@ export function todosOf(args: ToolArgs): PlanStep[] {
   return todos.map(({ content, status }) => ({ content, status }))
 }
 
-const MAX_GOAL = 160
+const MAX_PROMPT = 160
+const IMAGES = /\[Image[^\]]*\]/g
 
-// A prompt's first line, as the goal it states.
-export function goalOf(text: string): string | null {
+// A prompt's first line of text, flattened and cut.
+export function promptLine(text: string): string | null {
   const line = text
+    .replace(IMAGES, '')
     .split(/\r?\n/)
     .map(part => part.trim())
     .find(Boolean)
@@ -153,25 +155,51 @@ export function goalOf(text: string): string | null {
 
   const flat = line.replace(/\s+/g, ' ')
 
-  return flat.length > MAX_GOAL ? `${flat.slice(0, MAX_GOAL - 1)}…` : flat
+  return flat.length > MAX_PROMPT ? `${flat.slice(0, MAX_PROMPT - 1)}…` : flat
+}
+
+const MACHINE_ORIGINS = new Set([
+  'task-notification',
+  'scheduled-trigger',
+  'peer',
+  'peer-send-message',
+  'projects-relay',
+  'channel',
+  'coordinator',
+  'observer',
+  'observer-activity',
+])
+
+type Submission = { command?: unknown; isMeta?: true; origin?: { kind: string; asUser?: true } }
+
+// What the person wrote, at the composer, from a phone or through a button of theirs; not a slash command, a
+// notification, another session's message or a plugin's words of its own.
+export function isOwnPrompt(e: Submission): boolean {
+  if (e.command !== undefined || e.isMeta === true) {
+    return false
+  }
+
+  const kind = e.origin?.kind ?? 'unclassified'
+
+  return kind === 'plugin' ? e.origin?.asUser === true : !MACHINE_ORIGINS.has(kind)
 }
 
 type TranscriptRow = { role: string; text: string; toolResults?: readonly unknown[] }
 
 const SYSTEM_BLOCKS = /<([a-z][\w-]*)[^>]*>[\s\S]*?<\/\1>/gi
 
-// The session's first prompt of the person's own: system blocks stripped, a compaction's summary, slash commands and
-// notices skipped.
-export function firstPrompt(rows: readonly TranscriptRow[]): string | null {
-  for (const row of rows) {
+// The session's latest prompt of the person's own: system blocks and images stripped, a compaction's summary, slash
+// commands and notices skipped.
+export function lastPrompt(rows: readonly TranscriptRow[]): string | null {
+  for (const row of [...rows].reverse()) {
     if (row.role !== 'user' || (row.toolResults?.length ?? 0) > 0) {
       continue
     }
 
-    const text = row.text.replace(SYSTEM_BLOCKS, '').trim()
+    const text = row.text.replace(SYSTEM_BLOCKS, '').replace(IMAGES, '').trim()
 
     if (text !== '' && !/^[/[]/.test(text) && !/^This session is being continued/i.test(text)) {
-      return goalOf(text)
+      return promptLine(text)
     }
   }
 

@@ -61,7 +61,7 @@ declare module 'claude-code' {
       status: GitStatus | null
       usage: UsageView | null
       agents: AgentView[]
-      goal: string | null
+      latestPrompt: string | null
       turn: TurnView
       plan: PlanStep[]
       activity: ActivityView

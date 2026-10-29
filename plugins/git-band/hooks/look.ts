@@ -30,7 +30,7 @@ export type Icon =
   | 'done'
   | 'failed'
   | 'queued'
-  | 'goal'
+  | 'prompt'
   | 'history'
   | 'file'
   | 'flask'
@@ -96,7 +96,7 @@ const ICON_PATHS: Record<Icon, string> = {
   done: '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
   failed: '<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>',
   queued: '<circle cx="12" cy="12" r="10" stroke-dasharray="3.5 3"/>',
-  goal: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+  prompt: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
   history: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
   file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
   flask: '<path d="M10 2v7.31"/><path d="M14 9.3V1.99"/><path d="M8.5 2h7"/><path d="M14 9.3a6.5 6.5 0 1 1-4 0"/><path d="M5.52 16h12.96"/>',
@@ -397,7 +397,7 @@ export function stepOf(plan: readonly PlanStep[]): Step | null {
   }
 }
 
-export function statusOf(turn: TurnView, goal: string | null, plan: readonly PlanStep[], now: number): StatusRow {
+export function statusOf(turn: TurnView, prompt: string | null, plan: readonly PlanStep[], now: number): StatusRow {
   const phase = PHASES[turn.phase]
   const state: Token[] = [{ text: turn.phase === 'working' ? turn.detail || phase.word : phase.word, tone: 'ink' }]
 
@@ -411,8 +411,8 @@ export function statusOf(turn: TurnView, goal: string | null, plan: readonly Pla
 
   const items: Item[] = [{ icon: { name: phase.icon, tone: 'ink' }, tokens: state, chip: phase.tone }]
 
-  if (goal !== null) {
-    items.push({ icon: { name: 'goal', tone: 'gray' }, tokens: [{ text: goal, tone: 'text' }] })
+  if (prompt !== null) {
+    items.push({ icon: { name: 'prompt', tone: 'gray' }, tokens: [{ text: prompt, tone: 'text' }] })
   }
 
   return { items, step: stepOf(plan), tone: phase.tone }
@@ -972,7 +972,7 @@ function drawStep(step: Step, label: string, tone: Tone, parts: string[]): void 
   }
 }
 
-// The state and the goal on the left, the plan's step at the right edge. Below STEP_LABEL_BELOW the step keeps its
+// The state and the latest prompt on the left, the plan's step at the right edge. Below STEP_LABEL_BELOW the step keeps its
 // bar and number and drops its words; the left side is clipped to the room the step leaves.
 export function drawStatus(row: StatusRow, guess: number): Image {
   const step = row.step

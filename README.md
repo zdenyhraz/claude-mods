@@ -6,14 +6,14 @@ Mods need Claude Code 2.1.287 or later.
 
 | Mod | What it does |
 | --- | --- |
-| [git-band](plugins/git-band) | A session dashboard above the prompt: what the session is doing and for, what changed since your prompt, git branch, worktree and changes, context usage, plan limits and subagents. |
+| [git-band](plugins/git-band) | A session dashboard above the prompt: what the session is doing and your latest prompt, what changed since it, git branch, worktree and changes, context usage, plan limits and subagents. |
 | [session-files](plugins/session-files) | A pane beside the transcript with the files this session added, changed, deleted, renamed or committed, as a tree coloured by change, with each file's diff on hover and the file with its changes marked on click. |
 
 ## git-band
 
 While the session works, with subagents running:
 
-![git-band while it runs tests: the state chip, goal and plan step, what changed since the prompt, the git row with the plan limits, the context bar and five subagent cards](plugins/git-band/docs/dashboard-agents.png)
+![git-band while it runs tests: the state chip, the latest prompt and the plan step, what changed since the prompt, the git row with the plan limits, the context bar and five subagent cards](plugins/git-band/docs/dashboard-agents.png)
 
 Waiting for you:
 

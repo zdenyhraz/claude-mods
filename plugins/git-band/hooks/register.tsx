@@ -42,9 +42,10 @@ import {
   commandOf,
   describeTool,
   editedPath,
-  firstPrompt,
-  goalOf,
+  isOwnPrompt,
+  lastPrompt,
   pickHue,
+  promptLine,
   shortPath,
   todosOf,
   waitsFor,
@@ -57,7 +58,7 @@ import type { HueTable, ToolArgs } from './session'
 const SETTLE_MS = 300
 const TICK_MS = 5_000
 // An estimate of a cell's width in CSS pixels on the desktop. The images fill the band's real width whatever it
-// is; the estimate only decides how many agent cards go to a row, where the goal is cut, and what an image shows
+// is; the estimate only decides how many agent cards go to a row, where the prompt is cut, and what an image shows
 // if its CSS is dropped.
 const PX_PER_COLUMN = 7.6
 const REFRESHING_TOOLS = /^(Bash|PowerShell|Edit|Write|NotebookEdit|EnterWorktree|ExitWorktree)$/
@@ -65,7 +66,7 @@ const REFRESHING_TOOLS = /^(Bash|PowerShell|Edit|Write|NotebookEdit|EnterWorktre
 const status = atom({ plugin: 'git-band', key: 'status' } as const, null)
 const usage = atom({ plugin: 'git-band', key: 'usage' } as const, null)
 const agents = atom({ plugin: 'git-band', key: 'agents' } as const, [])
-const goal = atom({ plugin: 'git-band', key: 'goal' } as const, null)
+const latestPrompt = atom({ plugin: 'git-band', key: 'latestPrompt' } as const, null)
 const turn = atom({ plugin: 'git-band', key: 'turn' } as const, { phase: 'idle', detail: '', at: 0 })
 const plan = atom({ plugin: 'git-band', key: 'plan' } as const, [])
 const activity = atom({ plugin: 'git-band', key: 'activity' } as const, NO_ACTIVITY)
@@ -103,7 +104,7 @@ const GLYPHS: Partial<Record<Icon, string>> = {
   done: '✓',
   failed: '✕',
   queued: '○',
-  goal: '◎',
+  prompt: '›',
   history: '↺',
 }
 
@@ -390,34 +391,27 @@ async function setTurn($: EngineInterface, phase: TurnPhase, detail: string): Pr
   await update($, turn, () => ({ phase, detail, at: now }))
 }
 
-// A goal pinned with /purpose is kept in the store, so it outlives the process.
-async function pinGoal($: EngineInterface, text: string): Promise<void> {
-  await update($, goal, () => text)
-  const id = await $.session.id().catch(() => null)
-
-  if (id !== null) {
-    await $.store.set(`pinned:${id}`, text).catch(() => undefined)
+// A reload keeps the prompt in $.state; a mod loaded mid-session reads it from the transcript.
+async function loadLatestPrompt($: EngineInterface): Promise<void> {
+  if ((await read($, latestPrompt)) !== null) {
+    return
   }
-}
 
-// The pinned goal, else the session's first prompt from its transcript, which also holds for a mod loaded mid-session.
-async function loadGoal($: EngineInterface): Promise<void> {
-  const pinned = await $.store.get(`pinned:${await $.session.id()}`).catch(() => undefined)
-  const found = typeof pinned === 'string' ? pinned : firstPrompt(await $.session.messages())
+  const found = lastPrompt(await $.session.messages())
 
   if (found !== null) {
-    await update($, goal, () => found)
+    await update($, latestPrompt, () => found)
   }
 }
 
-// A prompt of the person's own starts what "since your prompt" counts, and gives a session with no goal its goal.
+// A prompt of the person's own shows at the top and starts what "since your prompt" counts.
 async function notePrompt($: EngineInterface, text: string): Promise<void> {
   const now = await $.clock.now()
   await update($, activity, () => ({ ...NO_ACTIVITY, since: now }))
-  const stated = goalOf(text)
+  const line = promptLine(text)
 
-  if (stated !== null && (await read($, goal)) === null) {
-    await update($, goal, () => stated)
+  if (line !== null) {
+    await update($, latestPrompt, () => line)
   }
 }
 
@@ -553,10 +547,7 @@ export const register: Register = on => {
   // A reload keeps the values in $.state but not the band's drawing, which otherwise waits for the next prompt.
   on('session.start', async ($, e, next) => {
     const result = await next(e)
-    await loadGoal($).catch(() => undefined)
-    void $.command
-      .register({ name: 'purpose', description: 'Pin what this session is for at the top of git-band', argumentHint: '<what this session is for>' })
-      .catch(() => undefined)
+    await loadLatestPrompt($).catch(() => undefined)
     isAwaitingPerson = true
     $.ui.invalidate('ui.render')
     void refresh($)
@@ -614,26 +605,12 @@ export const register: Register = on => {
     const result = await next(e)
     void dropFinished($)
 
-    if (e.command === undefined && e.isMeta !== true) {
+    if (isOwnPrompt(e)) {
       void notePrompt($, e.text).catch(() => undefined)
     }
 
     return result
   }).catch(($, e, next) => next(e))
-
-  on('command.run', { command: 'purpose' }, async ($, e) => {
-    const stated = goalOf(e.args)
-
-    if (stated === null) {
-      const current = await read($, goal)
-
-      return { text: current === null ? 'Nothing pinned: /purpose <what this session is for> pins it.' : `Pinned: ${current}` }
-    }
-
-    await pinGoal($, stated)
-
-    return { text: `Pinned: ${stated}` }
-  })
 
   on('agent.spawn', async ($, e, next) => {
     const result = await next(e)
@@ -717,9 +694,9 @@ export const register: Register = on => {
     }
 
     const board: Dashboard = { git: gitStatus, usage: await read($, usage), agents: await read($, agents), now: await $.clock.now() }
-    const [turnNow, goalNow, planNow, activityNow, claimed] = await Promise.all([read($, turn), read($, goal), read($, plan), read($, activity), read($, hue)])
+    const [turnNow, promptNow, planNow, activityNow, claimed] = await Promise.all([read($, turn), read($, latestPrompt), read($, plan), read($, activity), read($, hue)])
     board.hue = WORKTREE_HUES.find(tone => tone === claimed) ?? sessionHue(board.git)
-    const statusRow = turnNow.phase !== 'idle' || goalNow !== null || planNow.length > 0 ? statusOf(turnNow, goalNow, planNow, board.now) : null
+    const statusRow = turnNow.phase !== 'idle' || promptNow !== null || planNow.length > 0 ? statusOf(turnNow, promptNow, planNow, board.now) : null
     const since = activityNow.since === null ? null : sinceOf(activityNow, board.agents, board.now)
     const shownTimes = [...(['idle', 'working'].includes(turnNow.phase) ? [] : [turnNow.at]), ...(activityNow.since === null ? [] : [activityNow.since])]
     redrawWhenTimesChange($, board.now, shownTimes)

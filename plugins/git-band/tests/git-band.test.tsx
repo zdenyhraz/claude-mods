@@ -3,7 +3,7 @@ import type { TestBody } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { ago, describe, drawAgents, drawContext, drawStatus, drawTop, groupsOf, sessionHue, shorten, sliceTones, statusOf } from '../hooks/look'
-import { applyPlanUpdate, describeTool, firstPrompt, isTestCommand, pickHue, withHue } from '../hooks/session'
+import { applyPlanUpdate, describeTool, isOwnPrompt, isTestCommand, lastPrompt, pickHue, withHue } from '../hooks/session'
 
 type TestEngine = Parameters<TestBody>[0]
 
@@ -677,7 +677,7 @@ function fakeTools(on: On, failing: RegExp = /^$/) {
 
 const ended = (turnId: string, reason = 'answer') => ({ turnId, answer: 'done', durationMs: 1000, isAborted: reason === 'aborted', reason }) as never
 
-test('the first prompt becomes the goal, and the state follows the turn: working, waiting on a question, done', async ($, on) => {
+test('your latest prompt shows at the top, and the state follows the turn: working, waiting on a question, done', async ($, on) => {
   fakeGit(on, MAIN_LAYOUT, CLEAN)
   fakeTools(on)
   const clock = await start($, on)
@@ -693,38 +693,39 @@ test('the first prompt becomes the goal, and the state follows the turn: working
   await clock.settle()
   expect(await shown(ui)).toContain('Waiting for you Which fix first? just now · Make the band fill its width')
 
+  await $.prompt.submit({ text: 'Fix the width first' } as never)
   await $.turn.start({ text: 'go', turnId: 't2' })
   await $.turn.complete(ended('t2'))
   await clock.settle()
-  expect(await shown(ui)).toContain('Done just now')
+  expect(await shown(ui)).toContain('Done just now · Fix the width first')
 
   await clock.advance(5 * 60_000)
   expect(await shown(ui)).toContain('Done 5 m ago')
   await ui.unmount()
 })
 
-test('/purpose pins the goal, and a stopped turn says so', async ($, on) => {
-  const saved = new Map<string, unknown>()
+test('a stopped turn says so, and only what you wrote counts as your prompt', async ($, on) => {
   fakeGit(on, MAIN_LAYOUT, CLEAN)
   fakeTools(on)
-  on('session.id', () => ({ value: 'session-1' }) as never)
-  on('store.set', (_, e) => {
-    saved.set((e as { key: string }).key, (e as { value: unknown }).value)
-
-    return { value: undefined } as never
-  })
   const clock = await start($, on)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
 
-  const set = await $.command.run({ command: 'purpose', args: 'Speed up the scheduler' } as never)
-  expect((set as { text?: string }).text).toBe('Pinned: Speed up the scheduler')
-  await $.prompt.submit({ text: 'look at the profile first' } as never)
+  await $.prompt.submit({ text: '[Image #1]\nlook at the profile first' } as never)
   await $.turn.start({ text: 'work', turnId: 't1' })
   await $.turn.complete(ended('t1', 'aborted'))
   await clock.settle()
+  expect(await shown(ui)).toContain('Stopped just now · look at the profile first')
 
-  expect(await shown(ui)).toContain('Stopped just now · Speed up the scheduler')
-  expect(saved.get('pinned:session-1')).toBe('Speed up the scheduler')
+  const typed = { origin: { kind: 'composer' } }
+  expect(isOwnPrompt(typed)).toBe(true)
+  expect(isOwnPrompt({ origin: { kind: 'auto-continuation' } })).toBe(true)
+  expect(isOwnPrompt({ origin: { kind: 'sdk' } })).toBe(true)
+  expect(isOwnPrompt({ origin: { kind: 'plugin', asUser: true } })).toBe(true)
+  expect(isOwnPrompt({ ...typed, command: { name: 'compact' } })).toBe(false)
+  expect(isOwnPrompt({ ...typed, isMeta: true })).toBe(false)
+  expect(isOwnPrompt({ origin: { kind: 'task-notification' } })).toBe(false)
+  expect(isOwnPrompt({ origin: { kind: 'peer' } })).toBe(false)
+  expect(isOwnPrompt({ origin: { kind: 'plugin' } })).toBe(false)
   await ui.unmount()
 })
 
@@ -852,15 +853,20 @@ test('the chip keeps its words whole when the row is cut to fit', () => {
   expect(image.source).not.toContain('>Make the')
 })
 
-test('a session loaded mid-way takes its goal from the first prompt in its transcript', async ($, on) => {
+test('a session loaded mid-way takes your latest prompt from its transcript', async ($, on) => {
   fakeGit(on, MAIN_LAYOUT, CLEAN)
   on('session.id', () => ({ value: 'session-2' }) as never)
   on('session.messages', () =>
     ({
       value: [
         { role: 'user', text: 'This session is being continued from a previous conversation.', toolUses: [] },
+        { role: 'user', text: 'Make the band fill its width', toolUses: [] },
+        { role: 'assistant', text: 'Done.', toolUses: [] },
         { role: 'user', text: '<system-reminder>notes</system-reminder>\nFix the nav bar on narrow windows\nand test it', toolUses: [] },
         { role: 'assistant', text: 'On it.', toolUses: [] },
+        { role: 'user', text: '', toolUses: [], toolResults: [{ ok: true }] },
+        { role: 'user', text: '<task-notification>tests passed</task-notification>', toolUses: [] },
+        { role: 'user', text: '[SYSTEM NOTIFICATION] a background task ended', toolUses: [] },
       ],
     }) as never,
   )
@@ -868,7 +874,8 @@ test('a session loaded mid-way takes its goal from the first prompt in its trans
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
 
   expect(await shown(ui)).toContain('Ready · Fix the nav bar on narrow windows')
-  expect(firstPrompt([{ role: 'user', text: '/compact' }, { role: 'user', text: '[Image #1] what is this' }])).toBeNull()
+  expect(lastPrompt([{ role: 'user', text: '[Image #1] what is this' }, { role: 'user', text: '/compact' }])).toBe('what is this')
+  expect(lastPrompt([{ role: 'user', text: 'This session is being continued from a previous conversation.' }])).toBeNull()
   await ui.unmount()
 })
 

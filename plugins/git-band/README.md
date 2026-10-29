@@ -3,14 +3,15 @@
 A session dashboard above the Claude Code prompt, made for getting your bearings when you switch between
 sessions. Screenshots are in the [repository README](../../README.md#git-band).
 
-1. **Status**, once the session has a goal, a task list or a turn behind it:
+1. **Status**, once you have written a prompt, or the session has a task list or a turn behind it:
    - **State**, as a solid chip in the state's colour: what the session is doing right now (`Running tests`,
      `Editing look.ts`, `Thinking`) in blue, or `Waiting for you` in amber and what it waits on (a question, a
      plan to approve, the question a turn ended with), or `Done` in green, `Stopped` in grey or `Failed` in red
      and how long ago; `Ready` before the first turn.
-   - **Goal**: what the session is for: the first line of the session's first prompt, read from its
-     transcript, or what you pin with `/purpose <what this session is for>`, which is kept across reloads
-     and resumes.
+   - **Prompt**: the first line of your latest prompt, so what you last asked is in view without scrolling
+     up. Only what you wrote counts, at the prompt, from your phone or through a button of yours; not slash
+     commands, notifications or other sessions' messages. Loaded partway through a session, the band reads
+     it from the transcript.
    - **Step**, at the right: the task list's progress as a bar, the step's number and its words, e.g.
      `▰▰▰▱▱▱ 3/6 Run the test suite`; a finished plan shows its full bar alone.
 2. **Since your prompt**, after your first prompt: how long ago you last wrote, then what happened since,
