@@ -20,11 +20,15 @@ sessions. Screenshots are in the [repository README](../../README.md#git-band).
      (`3 · Run the test suite`) as wide as they need, what is left dark; the step's number of all at the
      right (`3/5`). The stripes move while the session works; a finished plan is green throughout and says
      `All 5 steps done`. A prompt you write between turns clears it until the session makes a new task list.
-2. **Git**, then the plan limits on the right:
-   - **Repo** (blue): a book icon and the repository's name.
-   - **Worktree**, only in a linked worktree: a fork icon and its name, in the worktree's colour.
-   - **Branch** (orange): its name, or the short commit id when detached; then `↑n` / `↓n` ahead of and
-     behind its upstream, or `no upstream`.
+2. **Git**, on two rows so names never crowd the counts:
+   - **Names**, with the plan limits on the right: the repository (blue, a book icon), then the worktree in its
+     colour (a fork icon), or in the main checkout the branch.
+   - **Limits**: a small ring per plan window, `5h` and `wk` written inside, filling green under 50%, amber
+     from 50% and red from 80%, with the percentage beside it. They appear after the session's first reply,
+     on a Pro or Max plan.
+   - **State**: the branch (orange) against its upstream, `↑n` / `↓n` or `no upstream`, or `up to date`. In a
+     worktree its branch is named only where it says more than the worktree does: `zdenyhraz/<worktree>` reads
+     `zdenyhraz/…`, a branch named like the worktree not at all; a detached HEAD shows its short commit id.
    - **Base**, on a branch other than the base: a merge icon, the base branch's name and `↑n` / `↓n`, how
      many commits the branch has that the base lacks and the other way round, e.g. `main ↑5 ↓12`. The base is
      what `origin/HEAD` names, else `origin/main`, `origin/master`, `main` or `master`; it shows only once the
@@ -32,22 +36,19 @@ sessions. Screenshots are in the [repository README](../../README.md#git-band).
    - **Changes**: a count for each kind present, each file counted once: `!` conflicted (red), `+` added
      (green), `~` modified (amber), `−` deleted (red), `→` renamed (blue), `?` untracked (teal), `●` staged
      (blue), then `+lines −lines` against `HEAD`; or `✓ clean`.
-   - **Since your prompt**, past a divider, subagents' work included: the files edited, the last test run
-     (`tests ✓` or `tests ✗`), the commits and the subagents that finished; with none of those, how many
-     commands ran. Where room is short they keep their icons and numbers alone (`3`, `✓`) before the names
-     before them are cut.
-   - **Limits**: a small ring per plan window, `5h` and `wk` written inside, filling green under 50%, amber
-     from 50% and red from 80%, with the percentage beside it. They appear after the session's first reply,
-     on a Pro or Max plan.
 
-   On the desktop app, hovering the names shows a card with them whole, the upstream and the base with how far
-   ahead and behind each is, and each kind of change in words; hovering one of the since-your-prompt items
-   lists what it counts and nothing else: the files with their edits, the test runs, each commit's subject and
-   short hash, the subagents or the commands with their results and times.
-3. **Context**: a bar of the context window, each category in its own colour, then the percentage used. On
+   Where room is short, names are cut in the middle, keeping both ends. On the desktop app, hovering either row
+   shows a card with the names whole, the upstream and the base with how far ahead and behind each is, and each
+   kind of change in words.
+3. **This prompt**, once something happened since your prompt, subagents' work included: the files edited, the
+   last test run (`tests ✓` or `tests ✗`), the commits and the subagents that finished; with none of those, how
+   many commands ran. Where room is short they keep their icons and numbers alone (`3`, `✓`). On the desktop
+   app, hovering one lists what it counts and nothing else: the files with their edits, the test runs, each
+   commit's subject and short hash, the subagents or the commands with their results and times.
+4. **Context**: a bar of the context window, each category in its own colour, then the percentage used. On
    the desktop app a yellow `compact` at the end of the row runs `/compact`; clicked during a turn, it runs
    once the turn ends.
-4. **Subagents**, only while there are any: a card per agent with its state (running, waiting, queued,
+5. **Subagents**, only while there are any: a card per agent with its state (running, waiting, queued,
    done, failed, stopped) in its own colour, its time, its task and type, and how many tools it has called.
    Active agents come first; finished ones stay until the next prompt. Ten cards at most, the last saying
    how many more.

@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { ago, describe, drawAgents, drawContext, drawPlan, drawStatus, drawTop, groupsOf, sessionHue, shorten, sliceTones, statusOf, stepOf } from '../hooks/look'
+import { ago, describe, drawAgents, drawContext, drawPlan, drawState, drawStatus, drawTop, groupsOf, sessionHue, shorten, sliceTones, statusOf, stepOf } from '../hooks/look'
 import { applyPlanUpdate, commandDir, describeTool, isOwnPrompt, isTestCommand, lastPrompt, pickHue, promptText, withHue } from '../hooks/session'
 import { isOwnBase, parseDivergence } from '../hooks/git'
 
@@ -149,7 +149,7 @@ test('a linked worktree with changes shows its branch, worktree and counts, on t
   }
 
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect(await shown(ui)).toBe('repo my-app · worktree feature-x · branch feature-x ↑2 ↓1 · changes !1 +1 ~2 −1 →1 ?2 ●3 +120 −8')
+  expect(await shown(ui)).toBe('repo my-app · worktree feature-x · branch ↑2 ↓1 · changes !1 +1 ~2 −1 →1 ?2 ●3 +120 −8')
   await ui.unmount()
 })
 
@@ -159,7 +159,7 @@ test('a clean main worktree shows the repo, branch and clean, with no worktree g
 
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
 
-  expect(await shown(ui)).toBe('repo my-app · branch main · changes ✓ clean')
+  expect(await shown(ui)).toBe('repo my-app · branch main · branch up to date · changes ✓ clean')
   await ui.unmount()
 })
 
@@ -253,11 +253,11 @@ test('entering and leaving a worktree updates the band at once', async ($, on) =
 
   await $.tool.call({ tool: 'EnterWorktree', name: 'feature-x' })
   await clock.advance(500)
-  expect(await shown(ui)).toContain('worktree feature-x · branch feature-x')
+  expect(await shown(ui)).toContain('worktree feature-x · branch up to date')
 
   await $.tool.call({ tool: 'ExitWorktree', action: 'keep' })
   await clock.advance(500)
-  expect(await shown(ui)).toBe('repo my-app · branch main · changes ✓ clean')
+  expect(await shown(ui)).toBe('repo my-app · branch main · branch up to date · changes ✓ clean')
   await ui.unmount()
 })
 
@@ -282,7 +282,7 @@ test('a git command that fails keeps the band as it last was', async ($, on) => 
   await $.turn.complete(ended('t1'))
   await clock.advance(500)
 
-  expect(await shown(ui)).toBe('Done just now · repo my-app · branch main · changes ✓ clean')
+  expect(await shown(ui)).toBe('Done just now · repo my-app · branch main · branch up to date · changes ✓ clean')
   await ui.unmount()
 })
 
@@ -446,7 +446,7 @@ test('context and the session and weekly limits come from each measurement', asy
   } as never)
   await clock.settle()
 
-  expect(await shown(ui)).toBe('repo my-app · branch main · changes ✓ clean · 5h 31% · week 18% · context 42%')
+  expect(await shown(ui)).toBe('repo my-app · branch main · 5h 31% · week 18% · branch up to date · changes ✓ clean · context 42%')
   await ui.unmount()
 })
 
@@ -631,7 +631,7 @@ function layoutAt(source: string, width: number): Layout {
     const rules = block[2] ?? ''
     layout.shapes.push(...[...rules.matchAll(/\.v(\d+)\{display:inline\}/g)].map(match => Number(match[1])))
     layout.limits.push(...[...rules.matchAll(/\.(l[pr])\{display:inline\}/g)].map(match => match[1] ?? ''))
-    const reserve = /#git-room\{width:calc\(100% - ([\d.]+)px\)\}/.exec(rules)?.[1]
+    const reserve = /#names-room\{width:calc\(100% - ([\d.]+)px\)\}/.exec(rules)?.[1]
 
     if (reserve !== undefined) {
       layout.room = width - Number(reserve)
@@ -675,8 +675,9 @@ test('at every band width one shape of the git row shows, and it never reaches t
     }
   }
 
-  expect(shapeSource(source, layoutAt(source, 1100).shapes[0] ?? -1)).toContain('>zdenyhraz/camera-da-structure-caf29d<')
-  expect(shapeSource(source, layoutAt(source, 520).shapes[0] ?? -1)).not.toContain('camera-da-structure-caf29d<')
+  expect(shapeSource(source, layoutAt(source, 1100).shapes[0] ?? -1)).toContain('>camera-da-structure-caf29d<')
+  expect(shapeSource(source, layoutAt(source, 200).shapes[0] ?? -1)).not.toContain('>camera-da-structure-caf29d<')
+  expect(drawState(git, 900).source).toContain('>zdenyhraz/…<')
   expect(layoutAt(source, 460).limits).toEqual(['lp'])
   expect(layoutAt(source, 380).limits).toEqual(['lr'])
   expect(source).toContain('>23%</text>')
@@ -825,7 +826,7 @@ test('what happened since your prompt sits on the git row, each item with its ow
 
   await $.prompt.submit({ text: 'Fix the nav' } as never)
   await clock.settle()
-  expect(await shown(ui)).toContain('Ready · Fix the nav just now · repo my-app · branch main · changes ✓ clean')
+  expect(await shown(ui)).toContain('Ready · Fix the nav just now · repo my-app · branch main · branch up to date · changes ✓ clean')
 
   await $.tool.call({ tool: 'Edit', file_path: 'C:/code/my-app/src/nav.ts', old_string: 'a', new_string: 'b' } as never)
   await $.tool.call({ tool: 'Edit', file_path: 'C:/code/my-app/src/nav.ts', old_string: 'b', new_string: 'c' } as never)
@@ -833,7 +834,7 @@ test('what happened since your prompt sits on the git row, each item with its ow
   await $.tool.call({ tool: 'Bash', command: 'npm test' } as never)
   await $.tool.call({ tool: 'Bash', command: 'git commit -m "Fix the nav"' } as never)
   await clock.settle()
-  expect(await shown(ui)).toContain('changes ✓ clean · 2 files · tests ✓ · 1 commit')
+  expect(await shown(ui)).toContain('changes ✓ clean · this prompt · 2 files · tests ✓ · 1 commit')
   expect(await shown(ui)).not.toContain('Since your prompt')
 
   const has = async (text: string) => (await ui.find({ type: 'Text', text })) !== undefined
@@ -881,7 +882,7 @@ test('each worktree has a colour of its own, the same every time, drawn as a str
 
   expect(stripe?.props?.alt).toBe(`worktree colour ${sessionHue(named('feature-x'))}`)
   expect(stripe?.props?.width).toBe(11)
-  expect(stripe?.props?.height).toBe(22)
+  expect(stripe?.props?.height).toBe(44)
   await ui.unmount()
 })
 

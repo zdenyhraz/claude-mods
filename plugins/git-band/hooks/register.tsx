@@ -12,24 +12,28 @@ import {
   describeContext,
   describeItems,
   describePlan,
+  describeState,
   describeStatus,
   describeTop,
   detailsOf,
   drawAgents,
+  drawActivity,
   drawContext,
   drawPlan,
+  drawState,
   drawStatus,
   drawStripe,
   drawTop,
-  groupsOf,
   isActive,
   kilo,
   limitName,
   limitTone,
+  nameGroupsOf,
   orderAgents,
   planText,
   sessionHue,
   sliceTones,
+  stateGroupsOf,
   stateOf,
   statusOf,
   stepOf,
@@ -843,15 +847,10 @@ export const register: Register = on => {
             </Box>
           )}
           <Box flexDirection="row" columnGap="md" overflow="hidden">
-            {groupsOf(board.git, undefined, board.hue).map(group => (
-              <Box key={group.key} flexDirection="row" columnGap="sm" flexShrink={group.key === 'changes' ? 0 : 1}>
+            {nameGroupsOf(board.git, undefined, board.hue).map(group => (
+              <Box key={group.key} flexDirection="row" columnGap="sm" flexShrink={1}>
                 {group.icon && GLYPHS[group.icon.name] && word(GLYPHS[group.icon.name] ?? '', group.icon.tone)}
                 {group.tokens.map(token => word(token.text, token.tone))}
-              </Box>
-            ))}
-            {activityItems.map(item => (
-              <Box key={item.topic} flexDirection="row" columnGap="sm" flexShrink={1}>
-                {item.tokens.map(token => word(token.text, token.tone))}
               </Box>
             ))}
             {board.usage?.limits.map(limit => (
@@ -861,6 +860,15 @@ export const register: Register = on => {
               </Box>
             ))}
           </Box>
+          <Box flexDirection="row" columnGap="md" overflow="hidden">
+            {stateGroupsOf(board.git).map(group => (
+              <Box key={group.key} flexDirection="row" columnGap="sm" flexShrink={group.key === 'changes' ? 0 : 1}>
+                {group.icon && GLYPHS[group.icon.name] && word(GLYPHS[group.icon.name] ?? '', group.icon.tone)}
+                {group.tokens.map(token => word(token.text, token.tone))}
+              </Box>
+            ))}
+          </Box>
+          {activityItems.length > 0 && line([{ icon: { name: 'history', tone: 'gray' }, tokens: [{ text: 'this prompt', tone: 'gray' }] }, ...activityItems])}
           {board.usage && (
             <Box flexDirection="row" columnGap="sm" overflow="hidden">
               {word(`context ${board.usage.percent}%`, limitTone(board.usage.percent))}
@@ -888,6 +896,10 @@ export const register: Register = on => {
       const planImage = step ? cachedImage('plan', `${Math.floor(guess)} ${isWorking} ${planAlt}`, () => drawPlan(step, guess, isWorking)) : null
       const topAlt = describeTop(board)
       const top = cachedImage('top', `${Math.floor(guess)} ${tint} ${topAlt}`, () => drawTop(board, guess))
+      const stateAlt = describeState(board.git)
+      const state = cachedImage('state', `${Math.floor(guess)} ${stateAlt}`, () => drawState(board.git, guess))
+      const activityAlt = activityItems.length > 0 ? `this prompt · ${describeItems(activityItems)}` : ''
+      const activityImage = activityItems.length > 0 ? cachedImage('activity', activityAlt, () => drawActivity(activityItems)) : null
       const usageNow = board.usage
       const contextAlt = usageNow ? describeContext(usageNow) : ''
       const context = usageNow ? cachedImage('context', contextAlt, () => drawContext(usageNow, guess - COMPACT_COLUMNS * PX_PER_COLUMN)) : null
@@ -895,13 +907,12 @@ export const register: Register = on => {
       const cards = board.agents.length > 0 ? cachedImage('agents', `${Math.floor(guess)} ${agentsAlt}`, () => drawAgents(board.agents, guess, board.now)) : null
       const details = detailsOf(board.git)
       const detailsWidth = Math.max(...details.map(line => line.reduce((sum, token) => sum + token.text.length + 3, 0)))
-      // The git row's names and each activity item have a hover area of their own over their words, with their own card.
-      const namesColumns = Math.max(2, Math.floor(top.activityAt / PX_PER_COLUMN) - 1)
+      // Each activity item has a hover area of its own over its words, with its own card.
       const activityCards = activityItems.flatMap((item, index) => {
-        const span = top.activitySpans[index]
+        const span = activityImage?.spans[index]
         const entries = item.topic === undefined ? [] : sinceCard(item.topic, activityNow, board.agents, board.now)
 
-        if (span === undefined || entries.length === 0 || activityItems.length === 0) {
+        if (span === undefined || entries.length === 0) {
           return []
         }
 
@@ -918,7 +929,7 @@ export const register: Register = on => {
           },
         ]
       })
-      const rowsHeight = [statusImage, planImage, top, context, cards].reduce((sum, image) => sum + (image?.height ?? 0), 0)
+      const rowsHeight = [statusImage, planImage, top, state, activityImage, context, cards].reduce((sum, image) => sum + (image?.height ?? 0), 0)
       const stripe = drawStripe(tint, rowsHeight)
 
       // An Svg given no width fills the column Box it is in, so each image is laid out at the band's real width.
@@ -940,26 +951,26 @@ export const register: Register = on => {
             </Box>
           )}
           {planImage && <Svg source={planImage.source} alt={planAlt} height={planImage.height} />}
-          <Box flexDirection="column" width="100%">
+          <Box key="git" flexDirection="column" width="100%">
             <Svg source={top.source} alt={topAlt} height={top.height} />
-            <Box key="git" position="absolute" top={0} left={0} width={activityItems.length > 0 ? namesColumns : '100%'} height="100%">
-              <Box width="100%" height="100%">
-                <Text> </Text>
-              </Box>
-              <Box position="absolute" top={0} left={0} width={Math.min(e.props.bodyColumns, detailsWidth)} display="none" hover={{ display: 'flex' }} flexDirection="column">
-                {details.map((line, index) => (
-                  <Text wrap="truncate-end">
-                    {line.map((token, at) => [
-                      at > 0 ? <Text dimColor>{' · '}</Text> : '',
-                      <Text color={THEME_KEYS[token.tone]} bold={index === 0}>
-                        {token.text}
-                      </Text>,
-                    ])}
-                  </Text>
-                ))}
-              </Box>
+            <Svg source={state.source} alt={stateAlt} height={state.height} />
+            <Box position="absolute" top={0} left={0} width={Math.min(e.props.bodyColumns, detailsWidth)} display="none" hover={{ display: 'flex' }} flexDirection="column">
+              {details.map((line, index) => (
+                <Text wrap="truncate-end">
+                  {line.map((token, at) => [
+                    at > 0 ? <Text dimColor>{' · '}</Text> : '',
+                    <Text color={THEME_KEYS[token.tone]} bold={index === 0}>
+                      {token.text}
+                    </Text>,
+                  ])}
+                </Text>
+              ))}
             </Box>
-            {activityCards.map(card => (
+          </Box>
+          {activityImage && (
+            <Box flexDirection="column" width="100%">
+              <Svg source={activityImage.source} alt={activityAlt} height={activityImage.height} />
+              {activityCards.map(card => (
                 <Box key={card.key} position="absolute" top={0} left={card.left} width={card.cover} height="100%">
                   <Box width="100%" height="100%">
                     <Text> </Text>
@@ -982,6 +993,7 @@ export const register: Register = on => {
                 </Box>
               ))}
             </Box>
+          )}
           {context && (
             <Box flexDirection="row" alignItems="center" width="100%">
               <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>

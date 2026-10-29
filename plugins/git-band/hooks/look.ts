@@ -239,6 +239,44 @@ export function groupsOf(git: GitStatus, fit: GitFit = FULL, hue: Tone = session
   return groups
 }
 
+// The names row: the repository and the worktree, or in the main checkout the branch, which the state row then leaves
+// unnamed.
+export function nameGroupsOf(git: GitStatus, fit: GitFit = FULL, hue: Tone = sessionHue(git)): Group[] {
+  const names = groupsOf(git, fit, hue).filter(group => group.key === 'repo' || group.key === 'worktree')
+
+  if (git.worktree === null) {
+    names.push({ key: 'branch', border: 'claude', icon: { name: 'branch', tone: 'claude' }, tokens: [{ text: shorten(git.branch, fit.branch), tone: 'claude' }] })
+  }
+
+  return names
+}
+
+// A worktree's branch is mostly `<you>/<worktree>`: it reads `<you>/…` rather than the name again, and nothing at all
+// when it is the worktree's very name.
+export function foldedBranch(branch: string, worktree: string): string {
+  if (branch === worktree) {
+    return ''
+  }
+
+  return branch.endsWith(`/${worktree}`) ? `${branch.slice(0, -worktree.length)}…` : branch
+}
+
+// The state row: the branch against its upstream, the base, and the changes.
+export function stateGroupsOf(git: GitStatus, fit: GitFit = FULL): Group[] {
+  return groupsOf(git, fit)
+    .filter(group => group.key !== 'repo' && group.key !== 'worktree')
+    .map(group => {
+      if (group.key !== 'branch') {
+        return group
+      }
+
+      const name = git.worktree === null ? '' : git.isDetached ? git.branch : foldedBranch(git.branch, git.worktree)
+      const tokens = [...(name === '' ? [] : [{ text: shorten(name, fit.branch), tone: 'claude' as Tone }]), ...group.tokens.slice(1)]
+
+      return { ...group, tokens: tokens.length > 0 ? tokens : [{ text: 'up to date', tone: 'inactive' as Tone }] }
+    })
+}
+
 // The hover card's lines: the names whole, the upstream, and each kind of change in words.
 export function detailsOf(git: GitStatus): Token[][] {
   const names: Token[] = [{ text: git.repo, tone: 'sky' }]
@@ -504,10 +542,10 @@ export function describe(groups: Group[]): string {
 export function describeTop(board: Dashboard): string {
   const limits = board.usage?.limits ?? []
 
-  const activity = board.activity && board.activity.length > 0 ? [describeItems(board.activity)] : []
-
-  return [describe(groupsOf(board.git)), ...activity, ...limits.map(limit => `${limitName(limit.kind)} ${Math.round(limit.percent)}%`)].join(' · ')
+  return [describe(nameGroupsOf(board.git)), ...limits.map(limit => `${limitName(limit.kind)} ${Math.round(limit.percent)}%`)].join(' · ')
 }
+
+export const describeState = (git: GitStatus): string => describe(stateGroupsOf(git))
 
 export const describeContext = (usage: UsageView): string => `context ${usage.percent}%`
 
@@ -702,44 +740,20 @@ function limitsForms(limits: UsageView['limits']): LimitsForm[] {
   ]
 }
 
-type GitShape = { groups: Group[]; activity: Item[]; width: number; gitWidth: number }
+type GitShape = { groups: Group[]; width: number }
 
-// The activity as icons and numbers alone, which gives way before the git row's names do.
-const briefly = (items: Item[]): Item[] =>
-  items.map(item => (item.brief === undefined ? item : { ...item, tokens: [{ text: item.brief, tone: item.tokens[0]?.tone ?? 'gray' }] }))
-
-const activityStart = (gitWidth: number): number => gitWidth + 4 + textWidth('│', SIZES.strong) + 6
-
-// What happened since your prompt, after the git row's own groups past a divider.
-function drawActivity(items: Item[], gitWidth: number, parts: string[]): number {
-  if (items.length === 0) {
-    return gitWidth
-  }
-
-  const drawn: string[] = []
-  const end = drawItems(items, drawn)
-  parts.push(text('│', gitWidth + 4, 15, 'line', 'strong'), `<g transform="translate(${activityStart(gitWidth)} 0)">${drawn.join('')}</g>`)
-
-  return activityStart(gitWidth) + end
-}
-
-// The widest git row with the activity in words, then with the activity brief, then narrower git rows.
-function gitShapes(git: GitStatus, hue: Tone, activity: Item[]): GitShape[] {
+// Each fit's groups once, widest first.
+function shapesOf(groupsAt: (fit: GitFit) => Group[]): GitShape[] {
   const shapes: GitShape[] = []
-  const brief = briefly(activity)
 
-  GIT_FITS.forEach((fit, index) => {
-    const groups = groupsOf(git, fit, hue)
-    const gitWidth = drawGitRow(groups, [])
+  for (const fit of GIT_FITS) {
+    const groups = groupsAt(fit)
+    const last = shapes.at(-1)
 
-    for (const shown of index === 0 ? [activity, brief] : [brief]) {
-      const last = shapes.at(-1)
-
-      if (last === undefined || describe(last.groups) !== describe(groups) || describeItems(last.activity) !== describeItems(shown)) {
-        shapes.push({ groups, activity: shown, gitWidth, width: drawActivity(shown, gitWidth, []) })
-      }
+    if (last === undefined || describe(last.groups) !== describe(groups)) {
+      shapes.push({ groups, width: drawGitRow(groups, []) })
     }
-  })
+  }
 
   return shapes
 }
@@ -756,23 +770,18 @@ function shapeRange(shapes: GitShape[], index: number, form: LimitsForm): Range 
   }
 }
 
-// The image is as wide as the band, whatever that is in pixels. Every shape of the git row and form of the limits
-// is drawn, and media queries on the image's own width show the one that fits, so no estimate of the band's width
-// decides what shows; the estimate only picks what shows where media queries do not apply. The git row is also
-// clipped to the room the limits leave it.
-// `activityAt` and `activitySpans` are where the activity and each of its items sit in the shape the estimate picks, for
-// hover areas laid over them.
-export function drawTop(board: Dashboard, guess: number): Image & { activityAt: number; activitySpans: { start: number; end: number }[] } {
-  const limits = board.usage?.limits ?? []
-  const activity = board.activity ?? []
-  const shapes = gitShapes(board.git, board.hue ?? sessionHue(board.git), activity)
+// The image is as wide as the band, whatever that is in pixels. Every shape of the row and form of the limits is
+// drawn, and media queries on the image's own width show the one that fits, so no estimate of the band's width decides
+// what shows; the estimate only picks what shows where media queries do not apply. The row is also clipped to the room
+// the limits leave it. `id` keeps two such images' classes apart.
+function drawShaped(id: string, shapes: GitShape[], limits: UsageView['limits'], guess: number): Image {
   const forms = limitsForms(limits)
   const guessForm = forms.find(form => contains(form.range, guess)) ?? forms[forms.length - 1]
   const rules: string[] = []
   const shown = new Set<number>()
 
   for (const form of forms) {
-    rules.push(media(form.range, `.l{display:none}${form.name === '' ? '' : `.${form.name}{display:inline}`}#git-room{width:calc(100% - ${form.reserve}px)}`))
+    rules.push(media(form.range, `.l{display:none}${form.name === '' ? '' : `.${form.name}{display:inline}`}#${id}-room{width:calc(100% - ${form.reserve}px)}`))
 
     shapes.forEach((_, index) => {
       const range = shapeRange(shapes, index, form)
@@ -786,12 +795,12 @@ export function drawTop(board: Dashboard, guess: number): Image & { activityAt: 
 
   const reserve = guessForm?.reserve ?? 0
   const guessShape = shapes.findIndex((_, index) => guessForm !== undefined && contains(shapeRange(shapes, index, guessForm), guess))
-  const parts = [`<clipPath id="git"><rect id="git-room" x="0" y="0" width="${Math.max(0, guess - reserve)}" height="${ROW}"/></clipPath><g clip-path="url(#git)">`]
+  const parts = [`<clipPath id="${id}"><rect id="${id}-room" x="0" y="0" width="${Math.max(0, guess - reserve)}" height="${ROW}"/></clipPath><g clip-path="url(#${id})">`]
 
   shapes.forEach((shape, index) => {
     if (shown.has(index)) {
       parts.push(`<g class="v v${index}"${index === guessShape ? '' : ' display="none"'}>`)
-      drawActivity(shape.activity, drawGitRow(shape.groups, parts), parts)
+      drawGitRow(shape.groups, parts)
       parts.push('</g>')
     }
   })
@@ -809,11 +818,40 @@ export function drawTop(board: Dashboard, guess: number): Image & { activityAt: 
   }
 
   parts.push(atRightEdge(right.join(''), ROW))
-  const picked = shapes[guessShape] ?? shapes.at(-1)
-  const at = activityStart(picked?.gitWidth ?? 0)
-  const spans = itemSpans(picked?.activity ?? []).map(span => ({ start: at + span.start, end: at + span.end }))
 
-  return { ...wrap(parts, ROW, rules.join('')), activityAt: at, activitySpans: spans }
+  return wrap(parts, ROW, rules.join(''))
+}
+
+// The names row: the repository and the worktree, or the branch in the main checkout; the plan limits at the right.
+export function drawTop(board: Dashboard, guess: number): Image {
+  const hue = board.hue ?? sessionHue(board.git)
+
+  return drawShaped('names', shapesOf(fit => nameGroupsOf(board.git, fit, hue)), board.usage?.limits ?? [], guess)
+}
+
+// The state row: the branch against its upstream and the base, and the changes.
+export function drawState(git: GitStatus, guess: number): Image {
+  return drawShaped('state', shapesOf(fit => stateGroupsOf(git, fit)), [], guess)
+}
+
+// The activity as icons and numbers alone, for a band too narrow for its words.
+const briefly = (items: Item[]): Item[] =>
+  items.map(item => (item.brief === undefined ? item : { ...item, tokens: [{ text: item.brief, tone: item.tokens[0]?.tone ?? 'gray' }] }))
+
+const THIS_PROMPT: Item = { icon: { name: 'history', tone: 'gray' }, tokens: [{ text: 'this prompt', tone: 'gray' }] }
+
+// What happened since your prompt, in words, or brief where the band is too narrow for them. `spans` are where its
+// items sit in words, for hover areas laid over them.
+export function drawActivity(items: Item[]): Image & { spans: { start: number; end: number }[] } {
+  const full = [THIS_PROMPT, ...items]
+  const brief = [THIS_PROMPT, ...briefly(items)]
+  const wide: string[] = []
+  const narrow: string[] = []
+  const width = drawItems(full, wide)
+  drawItems(brief, narrow)
+  const rules = `.ab{display:none}@media (max-width:${(width - 0.01).toFixed(2)}px){.aw{display:none}.ab{display:inline}}`
+
+  return { ...wrap([`<g class="aw">${wide.join('')}</g><g class="ab">${narrow.join('')}</g>`], ROW, rules), spans: itemSpans(full).slice(1) }
 }
 
 const CONTEXT_TOP = 4
