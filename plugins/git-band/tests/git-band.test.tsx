@@ -446,7 +446,7 @@ test('context and the session and weekly limits come from each measurement', asy
   } as never)
   await clock.settle()
 
-  expect(await shown(ui)).toBe('repo my-app · branch main · 5h 31% · week 18% · branch up to date · changes ✓ clean · context 42%')
+  expect(await shown(ui)).toBe('repo my-app · branch main · branch up to date · changes ✓ clean · context 42% · 5h 31% · week 18%')
   await ui.unmount()
 })
 
@@ -494,8 +494,9 @@ test('every context slice gets a hue of its own, even where /context gives greys
 
 test('each plan limit is a ring with its window named inside and its percentage beside it', () => {
   const usage = { tokens: 1, window: 200_000, percent: 0, slices: [], limits: [{ kind: 'five_hour', percent: 72 }, { kind: 'seven_day', percent: 5 }] }
-  const image = drawTop({ git: SMALL_REPO, usage, agents: [], now: 0 }, 720)
+  const image = drawContext(usage, 720)
 
+  expect(drawTop({ git: SMALL_REPO, usage, agents: [], now: 0 }, 720).source).not.toContain('>5h</text>')
   expect(image.source).toContain('>5h</text>')
   expect(image.source).toContain('>wk</text>')
   expect(image.source).toMatch(/<circle class="s-warning"[^>]*stroke-dasharray/)
@@ -668,7 +669,7 @@ test('at every band width one shape of the git row shows, and it never reaches t
     const layout = layoutAt(source, width)
 
     expect(layout.shapes.length).toBe(1)
-    expect(layout.limits.length).toBe(width < 360 ? 0 : 1)
+    expect(layout.limits.length).toBe(0)
 
     if (width >= 300) {
       expect(Math.max(...ends(shapeSource(source, layout.shapes[0] ?? -1)))).toBeLessThanOrEqual(layout.room + 1)
@@ -678,10 +679,11 @@ test('at every band width one shape of the git row shows, and it never reaches t
   expect(shapeSource(source, layoutAt(source, 1100).shapes[0] ?? -1)).toContain('>camera-da-structure-caf29d<')
   expect(shapeSource(source, layoutAt(source, 200).shapes[0] ?? -1)).not.toContain('>camera-da-structure-caf29d<')
   expect(drawState(git, 900).source).toContain('>zdenyhraz/camera-da-structure-caf29d<')
-  expect(layoutAt(source, 460).limits).toEqual(['lp'])
-  expect(layoutAt(source, 380).limits).toEqual(['lr'])
-  expect(source).toContain('>23%</text>')
-  expect(source).toContain('>5h</text>')
+  // The limits sit on the context row, in a form for each band width: rings with their percentages, rings alone, none.
+  const context = drawContext(usage, 900).source
+  expect(context).toContain('>23%</text>')
+  expect(context).toContain('>5h</text>')
+  expect(context).toContain('.cf{display:none}.cf1{display:inline}')
 })
 
 function fakeTools(on: On, failing: RegExp = /^$/) {

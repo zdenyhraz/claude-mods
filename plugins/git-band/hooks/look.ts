@@ -532,15 +532,12 @@ export function describe(groups: Group[]): string {
   return groups.map(group => `${group.key} ${group.tokens.map(token => token.text).join(' ')}`).join(' · ')
 }
 
-export function describeTop(board: Dashboard): string {
-  const limits = board.usage?.limits ?? []
-
-  return [describe(nameGroupsOf(board.git)), ...limits.map(limit => `${limitName(limit.kind)} ${Math.round(limit.percent)}%`)].join(' · ')
-}
+export const describeTop = (board: Dashboard): string => describe(nameGroupsOf(board.git))
 
 export const describeState = (git: GitStatus): string => describe(stateGroupsOf(git))
 
-export const describeContext = (usage: UsageView): string => `context ${usage.percent}%`
+export const describeContext = (usage: UsageView): string =>
+  [`context ${usage.percent}%`, ...usage.limits.map(limit => `${limitName(limit.kind)} ${Math.round(limit.percent)}%`)].join(' · ')
 
 export function describeAgents(agents: AgentView[], now: number): string {
   return orderAgents(agents)
@@ -820,11 +817,11 @@ function drawShaped(id: string, shapes: GitShape[], limits: UsageView['limits'],
   return wrap(parts, ROW, rules.join(''))
 }
 
-// The names row: the repository and the worktree, or the branch in the main checkout; the plan limits at the right.
+// The names row: the repository and the worktree, or the branch in the main checkout.
 export function drawTop(board: Dashboard, guess: number): Image {
   const hue = board.hue ?? sessionHue(board.git)
 
-  return drawShaped('names', shapesOf(fit => nameGroupsOf(board.git, fit, hue)), board.usage?.limits ?? [], guess)
+  return drawShaped('names', shapesOf(fit => nameGroupsOf(board.git, fit, hue)), [], guess)
 }
 
 // The state row: the branch against its upstream and the base, and the changes.
@@ -855,21 +852,22 @@ export function drawActivity(items: Item[]): Image & { spans: { start: number; e
 const CONTEXT_TOP = 4
 const CARDS_TOP = 8
 
-// The bar takes what the icon and the percentage leave of the band's real width; the slices are shares of it.
-export function drawContext(usage: UsageView, guess: number): Image {
+// The bar, its percentage and the limits as one form of the limits draws them; the bar takes what the rest leaves.
+function drawUsage(usage: UsageView, form: LimitsForm, guess: number, id: number, parts: string[]): void {
   const top = CONTEXT_TOP
   const percent = `${usage.percent}%`
   const percentWidth = textWidth(percent, SIZES.strong)
   const slices = usage.slices.length > 0 ? usage.slices : [{ name: 'Used', tokens: usage.tokens, color: 'autoAccept' }]
   const tones = sliceTones(slices)
   const barX = 21
-  // The gap before the percentage, the percentage, and room after it, so whatever sits beside the image does not touch it.
-  const reserve = barX + 10 + percentWidth + 12
+  // What follows the percentage: room after it, so whatever sits beside the image does not touch it, or the limits.
+  const after = form.name === '' ? 12 : form.reserve - LIMITS_GAP + 14
+  const reserve = barX + 10 + percentWidth + after
   const barY = top + 7.5
   const guessBar = Math.max(0, guess - reserve)
   const share = (fraction: number): string => `(100% - ${reserve}px) * ${fraction.toFixed(4)}`
   const track = `x="${barX}" y="${barY}" width="${guessBar}" height="7" rx="3.5" style="width:max(0px, calc(100% - ${reserve}px))"`
-  const parts = [icon('context', 0, top + 3, 'violet'), `<clipPath id="bar"><rect ${track}/></clipPath><rect class="f-free" ${track}/><g clip-path="url(#bar)">`]
+  parts.push(`<clipPath id="bar${id}"><rect ${track}/></clipPath><rect class="f-free" ${track}/><g clip-path="url(#bar${id})">`)
   let start = 0
 
   slices.forEach((slice, index) => {
@@ -882,10 +880,35 @@ export function drawContext(usage: UsageView, guess: number): Image {
   })
 
   parts.push('</g>')
-  parts.push(atRightEdge(text(percent, -(percentWidth + 12), top + 15, limitTone(usage.percent), 'strong'), top + ROW + top))
+
+  const right = [text(percent, -(percentWidth + after), top + 15, limitTone(usage.percent), 'strong')]
+
+  if (form.name !== '') {
+    right.push(`<g transform="translate(-${LIMITS_SPACE} ${top})">`)
+    drawLimits(usage.limits, 0, form.hasPercent, right)
+    right.push('</g>')
+  }
+
+  parts.push(atRightEdge(right.join(''), top + ROW + top))
+}
+
+// The context bar and its percentage, then the plan limits: everything about usage on one row. Each form of the limits
+// is drawn, and media queries on the image's own width show the one that fits, as on the names row.
+export function drawContext(usage: UsageView, guess: number): Image {
+  const forms = limitsForms(usage.limits)
+  const guessForm = forms.find(form => contains(form.range, guess)) ?? forms[forms.length - 1]
+  const parts = [icon('context', 0, CONTEXT_TOP + 3, 'violet')]
+  const rules: string[] = []
+
+  forms.forEach((form, index) => {
+    rules.push(media(form.range, `.cf{display:none}.cf${index}{display:inline}`))
+    parts.push(`<g class="cf cf${index}"${form === guessForm ? '' : ' display="none"'}>`)
+    drawUsage(usage, form, guess, index, parts)
+    parts.push('</g>')
+  })
 
   // As much room below as above, so the row's text sits at the image's middle, where a neighbour centred on it lines up.
-  return wrap(parts, top + ROW + top)
+  return wrap(parts, CONTEXT_TOP + ROW + CONTEXT_TOP, rules.join(''))
 }
 
 // A card's cell is a share of the band's width; within it the card is inset so the first card starts at the left

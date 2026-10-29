@@ -854,12 +854,6 @@ export const register: Register = on => {
                 {group.tokens.map(token => word(token.text, token.tone))}
               </Box>
             ))}
-            {board.usage?.limits.map(limit => (
-              <Box key={limit.kind} flexDirection="row" columnGap="sm">
-                {word(limitName(limit.kind), 'gray')}
-                {word(`${Math.round(limit.percent)}%`, limitTone(limit.percent))}
-              </Box>
-            ))}
           </Box>
           <Box flexDirection="row" columnGap="md" overflow="hidden">
             {stateGroupsOf(board.git).map(group => (
@@ -873,6 +867,7 @@ export const register: Register = on => {
           {board.usage && (
             <Box flexDirection="row" columnGap="sm" overflow="hidden">
               {word(`context ${board.usage.percent}%`, limitTone(board.usage.percent))}
+              {board.usage.limits.map(limit => word(`${limitName(limit.kind)} ${Math.round(limit.percent)}%`, limitTone(limit.percent)))}
               {board.usage.slices.map((slice, index) => word(`${slice.name} ${kilo(slice.tokens)}`, sliceTones(board.usage?.slices ?? [])[index] ?? 'gray'))}
             </Box>
           )}

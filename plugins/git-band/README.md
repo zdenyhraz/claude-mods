@@ -21,11 +21,8 @@ sessions. Screenshots are in the [repository README](../../README.md#git-band).
      right (`3/5`). The stripes move while the session works; a finished plan is green throughout and says
      `All 5 steps done`. A prompt you write between turns clears it until the session makes a new task list.
 2. **Git**, on two rows so names never crowd the counts:
-   - **Names**, with the plan limits on the right: the repository (blue, a book icon), then `worktree`, and the fork icon
+   - **Names**: the repository (blue, a book icon), then `worktree`, and the fork icon
      and its name in its colour, the word dropped where room is short; or in the main checkout the branch.
-   - **Limits**: a small ring per plan window, `5h` and `wk` written inside, filling green under 50%, amber
-     from 50% and red from 80%, with the percentage beside it. They appear after the session's first reply,
-     on a Pro or Max plan.
    - **State**: the branch (orange) by its full name, or the short commit id when detached, against its
      upstream: `↑n` / `↓n` or `no upstream`. In the main checkout the names row already names it, so this row
      starts with the counts, or `up to date`.
@@ -45,9 +42,11 @@ sessions. Screenshots are in the [repository README](../../README.md#git-band).
    many commands ran. Where room is short they keep their icons and numbers alone (`3`, `✓`). On the desktop
    app, hovering one lists what it counts and nothing else: the files with their edits, the test runs, each
    commit's subject and short hash, the subagents or the commands with their results and times.
-4. **Context**: a bar of the context window, each category in its own colour, then the percentage used. On
-   the desktop app a yellow `compact` at the end of the row runs `/compact`; clicked during a turn, it runs
-   once the turn ends.
+4. **Context and limits**: a bar of the context window, each category in its own colour, then the percentage used;
+   then a small ring per plan window, `5h` and `wk` written inside, filling green under 50%, amber from 50% and
+   red from 80%, with the percentage beside it, which appear after the session's first reply on a Pro or Max plan
+   and drop their percentages, then themselves, where room is short. On the desktop app a yellow `compact` at the
+   end of the row runs `/compact`; clicked during a turn, it runs once the turn ends.
 5. **Subagents**, only while there are any: a card per agent with its state (running, waiting, queued,
    done, failed, stopped) in its own colour, its time, its task and type, and how many tools it has called.
    Active agents come first; finished ones stay until the next prompt. Ten cards at most, the last saying

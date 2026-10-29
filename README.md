@@ -12,7 +12,7 @@ Mods need Claude Code 2.1.287 or later.
 
 While the session works, with subagents running:
 
-![git-band while it runs tests: the state chip and the latest prompt, the plan's progress bar, the git names with the plan limits, the git state, what happened since the prompt, the context bar and five subagent cards](plugins/git-band/docs/dashboard-agents.png)
+![git-band while it runs tests: the state chip and the latest prompt, the plan's progress bar, the git names and state, what happened since the prompt, the context bar with the plan limits and five subagent cards](plugins/git-band/docs/dashboard-agents.png)
 
 Waiting for you:
 
