@@ -116,7 +116,7 @@ const CHANGES: { key: keyof GitStatus; symbol: string; word: string; tone: Tone 
   { key: 'staged', symbol: '●', word: 'staged', tone: 'blue' },
 ]
 
-const MAX_NAME = 40
+const MAX_NAME = 72
 
 // Cut in the middle, so a branch keeps both its prefix and the end that tells it apart.
 export function shorten(name: string, max = MAX_NAME): string {
@@ -239,10 +239,12 @@ export function groupsOf(git: GitStatus, fit: GitFit = FULL, hue: Tone = session
   return groups
 }
 
-// The names row: the repository and the worktree, or in the main checkout the branch, which the state row then leaves
-// unnamed.
+// The names row: the repository and the worktree, said to be one where there is room, or in the main checkout the
+// branch, which the state row then leaves unnamed.
 export function nameGroupsOf(git: GitStatus, fit: GitFit = FULL, hue: Tone = sessionHue(git)): Group[] {
-  const names = groupsOf(git, fit, hue).filter(group => group.key === 'repo' || group.key === 'worktree')
+  const names = groupsOf(git, fit, hue)
+    .filter(group => group.key === 'repo' || group.key === 'worktree')
+    .map(group => (group.key === 'worktree' && fit.hasLines && group.tokens.length > 0 ? { ...group, tokens: [{ text: 'worktree', tone: 'gray' as Tone }, ...group.tokens] } : group))
 
   if (git.worktree === null) {
     names.push({ key: 'branch', border: 'claude', icon: { name: 'branch', tone: 'claude' }, tokens: [{ text: shorten(git.branch, fit.branch), tone: 'claude' }] })
@@ -251,27 +253,17 @@ export function nameGroupsOf(git: GitStatus, fit: GitFit = FULL, hue: Tone = ses
   return names
 }
 
-// A worktree's branch is mostly `<you>/<worktree>`: it reads `<you>/…` rather than the name again, and nothing at all
-// when it is the worktree's very name.
-export function foldedBranch(branch: string, worktree: string): string {
-  if (branch === worktree) {
-    return ''
-  }
-
-  return branch.endsWith(`/${worktree}`) ? `${branch.slice(0, -worktree.length)}…` : branch
-}
-
-// The state row: the branch against its upstream, the base, and the changes.
+// The state row: the branch against its upstream, the base, and the changes. In the main checkout the names row
+// already names the branch.
 export function stateGroupsOf(git: GitStatus, fit: GitFit = FULL): Group[] {
   return groupsOf(git, fit)
     .filter(group => group.key !== 'repo' && group.key !== 'worktree')
     .map(group => {
-      if (group.key !== 'branch') {
+      if (group.key !== 'branch' || git.worktree !== null) {
         return group
       }
 
-      const name = git.worktree === null ? '' : git.isDetached ? git.branch : foldedBranch(git.branch, git.worktree)
-      const tokens = [...(name === '' ? [] : [{ text: shorten(name, fit.branch), tone: 'claude' as Tone }]), ...group.tokens.slice(1)]
+      const tokens = group.tokens.slice(1)
 
       return { ...group, tokens: tokens.length > 0 ? tokens : [{ text: 'up to date', tone: 'inactive' as Tone }] }
     })
@@ -535,8 +527,15 @@ export function activityOf(activity: ActivityView, agents: readonly AgentView[])
   return items
 }
 
+// A group's key and words, the key once where the words already start with it.
 export function describe(groups: Group[]): string {
-  return groups.map(group => `${group.key} ${group.tokens.map(token => token.text).join(' ')}`).join(' · ')
+  return groups
+    .map(group => {
+      const words = group.tokens.map(token => token.text)
+
+      return (words[0] === group.key ? words : [group.key, ...words]).join(' ')
+    })
+    .join(' · ')
 }
 
 export function describeTop(board: Dashboard): string {

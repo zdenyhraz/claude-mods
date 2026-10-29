@@ -149,7 +149,7 @@ test('a linked worktree with changes shows its branch, worktree and counts, on t
   }
 
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect(await shown(ui)).toBe('repo my-app · worktree feature-x · branch ↑2 ↓1 · changes !1 +1 ~2 −1 →1 ?2 ●3 +120 −8')
+  expect(await shown(ui)).toBe('repo my-app · worktree feature-x · branch feature-x ↑2 ↓1 · changes !1 +1 ~2 −1 →1 ?2 ●3 +120 −8')
   await ui.unmount()
 })
 
@@ -253,7 +253,7 @@ test('entering and leaving a worktree updates the band at once', async ($, on) =
 
   await $.tool.call({ tool: 'EnterWorktree', name: 'feature-x' })
   await clock.advance(500)
-  expect(await shown(ui)).toContain('worktree feature-x · branch up to date')
+  expect(await shown(ui)).toContain('worktree feature-x · branch feature-x')
 
   await $.tool.call({ tool: 'ExitWorktree', action: 'keep' })
   await clock.advance(500)
@@ -595,7 +595,7 @@ test('hovering the git row shows its names whole, the upstream and the changes i
     expect(await has(whole)).toBe(true)
   }
 
-  expect(await shown(ui)).toContain('branch zdenyhraz/camera-da-…-and-then-some-more ')
+  expect(await shown(ui)).toContain('branch zdenyhraz/camera-da-structure-caf29d-and-then-some-more ')
   await ui.unmount()
 })
 
@@ -677,7 +677,7 @@ test('at every band width one shape of the git row shows, and it never reaches t
 
   expect(shapeSource(source, layoutAt(source, 1100).shapes[0] ?? -1)).toContain('>camera-da-structure-caf29d<')
   expect(shapeSource(source, layoutAt(source, 200).shapes[0] ?? -1)).not.toContain('>camera-da-structure-caf29d<')
-  expect(drawState(git, 900).source).toContain('>zdenyhraz/…<')
+  expect(drawState(git, 900).source).toContain('>zdenyhraz/camera-da-structure-caf29d<')
   expect(layoutAt(source, 460).limits).toEqual(['lp'])
   expect(layoutAt(source, 380).limits).toEqual(['lr'])
   expect(source).toContain('>23%</text>')
