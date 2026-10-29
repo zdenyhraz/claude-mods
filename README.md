@@ -8,6 +8,24 @@ Mods need Claude Code 2.1.287 or later.
 | --- | --- |
 | [glance](plugins/glance) | A session dashboard above the prompt: what the session is doing and your latest prompt, what changed since it, git branch, worktree and changes, context usage, plan limits and subagents. |
 
+It also keeps my personal guidance for Claude, [user/CLAUDE.md](user/CLAUDE.md), so that every machine
+I work on has the same.
+
+## Set up a machine
+
+```sh
+git clone git@github.com:zdenyhraz/claude-mods.git
+python claude-mods/setup.py
+```
+
+`setup.py` makes `~/.claude/CLAUDE.md` import `user/CLAUDE.md`, so the guidance applies in every
+session, worktrees included. It also adds the clone as the `claude-mods` marketplace and installs its
+mods at user scope, then warns if git has no global `user.name` or `user.email`. Where `claude` is
+not on `PATH`, as with the desktop app alone, pass `--claude <path to claude>`. Running it again is safe.
+
+To update, `git pull` in the clone: new sessions read the new guidance, and `/reload-plugins` loads the
+new mods into a running one.
+
 ## glance
 
 While the session works, with subagents running:

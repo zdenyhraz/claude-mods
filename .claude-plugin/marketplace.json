@@ -6,7 +6,7 @@
     {
       "name": "glance",
       "source": "./plugins/glance",
-      "description": "A band above the prompt with the session's git branch, worktree, ahead/behind and changed-file counts."
+      "description": "A session dashboard above the prompt: state, latest prompt, plan, git, activity, context, limits and subagents."
     }
   ]
 }
