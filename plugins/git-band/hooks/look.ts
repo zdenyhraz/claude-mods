@@ -366,7 +366,7 @@ export type Item = { icon?: { name: Icon; tone: Tone }; tokens: Token[]; chip?: 
 
 export type Step = { position: number; total: number; text: string; states: PlanStep['status'][]; isComplete: boolean }
 
-export type StatusRow = { items: Item[]; step: Step | null; tone: Tone }
+export type StatusRow = { items: Item[]; tone: Tone }
 
 const PHASES: Record<TurnPhase, { icon: Icon; tone: Tone; word: string }> = {
   idle: { icon: 'queued', tone: 'gray', word: 'Ready' },
@@ -378,13 +378,14 @@ const PHASES: Record<TurnPhase, { icon: Icon; tone: Tone; word: string }> = {
 }
 
 // The step in progress, else the next one, else the last; numbered by its place, or by how many are done when none runs.
+// A plan of one step has no progress worth a bar.
 export function stepOf(plan: readonly PlanStep[]): Step | null {
   const current = plan.findIndex(step => step.status === 'in_progress')
   const next = plan.findIndex(step => step.status === 'pending')
   const index = current >= 0 ? current : next >= 0 ? next : plan.length - 1
   const shown = plan[index]
 
-  if (shown === undefined) {
+  if (shown === undefined || plan.length < 2) {
     return null
   }
 
@@ -397,9 +398,17 @@ export function stepOf(plan: readonly PlanStep[]): Step | null {
   }
 }
 
-export function statusOf(turn: TurnView, prompt: string | null, plan: readonly PlanStep[], now: number): StatusRow {
-  const phase = PHASES[turn.phase]
+const IN_FLIGHT = { icon: 'running' as Icon, tone: 'sky' as Tone, word: 'Running in background' }
+
+// A turn that ended with work still in flight is not done: it shows what still runs, in the working colour.
+export function statusOf(turn: TurnView, prompt: string | null, now: number, inFlight: readonly string[] = []): StatusRow {
+  const isInFlight = turn.phase === 'done' && inFlight.length > 0
+  const phase = isInFlight ? IN_FLIGHT : PHASES[turn.phase]
   const state: Token[] = [{ text: turn.phase === 'working' ? turn.detail || phase.word : phase.word, tone: 'ink' }]
+
+  if (isInFlight) {
+    state.push({ text: inFlight.length > 1 ? `${inFlight[0]} +${inFlight.length - 1}` : (inFlight[0] ?? ''), tone: 'sky' })
+  }
 
   if (turn.phase === 'waiting' && turn.detail !== '') {
     state.push({ text: turn.detail, tone: phase.tone })
@@ -415,7 +424,7 @@ export function statusOf(turn: TurnView, prompt: string | null, plan: readonly P
     items.push({ icon: { name: 'prompt', tone: 'gray' }, tokens: [{ text: prompt, tone: 'text' }] })
   }
 
-  return { items, step: stepOf(plan), tone: phase.tone }
+  return { items, tone: phase.tone }
 }
 
 const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? '' : 's'}`
@@ -469,12 +478,10 @@ export function describeAgents(agents: AgentView[], now: number): string {
 
 export const describeItems = (items: Item[]): string => items.map(item => item.tokens.map(token => token.text).join(' ')).join(' · ')
 
-export function describeStatus(row: StatusRow): string {
-  const words = row.step?.isComplete === false ? ` ${row.step.text}` : ''
-  const step = row.step ? ` · step ${row.step.position}/${row.step.total}${words}` : ''
+export const describeStatus = (row: StatusRow): string => describeItems(row.items)
 
-  return `${describeItems(row.items)}${step}`
-}
+export const describePlan = (step: Step): string =>
+  step.isComplete ? `plan ${step.total}/${step.total} done` : `plan step ${step.position} of ${step.total} ${step.text}`
 
 export function describeDashboard(board: Dashboard): string {
   return [describeTop(board), board.usage ? describeContext(board.usage) : '', describeAgents(board.agents, board.now)].filter(Boolean).join(' · ')
@@ -944,68 +951,69 @@ function fitItems(items: Item[], room: number): Item[] {
   return fitted
 }
 
-const SEGMENT = 11
-const SEGMENT_GAP = 2
-const STEP_LABEL_BELOW = 520
-
-function stepWidth(step: Step, label: string): number {
-  const count = textWidth(`${step.position}/${step.total}`, SIZES.strong)
-
-  return step.total * (SEGMENT + SEGMENT_GAP) - SEGMENT_GAP + 6 + count + (label === '' ? 0 : 5 + textWidth(label, SIZES.name))
-}
-
-function drawStep(step: Step, label: string, tone: Tone, parts: string[]): void {
-  let x = -stepWidth(step, label)
-
-  for (const state of step.states) {
-    const fill = state === 'completed' ? 'success' : state === 'in_progress' ? tone : 'free'
-    parts.push(`<rect class="f-${fill}" x="${x}" y="8.5" width="${SEGMENT}" height="5" rx="2.5"/>`)
-    x += SEGMENT + SEGMENT_GAP
-  }
-
-  x += 6 - SEGMENT_GAP
-  const count = `${step.position}/${step.total}`
-  parts.push(text(count, x, 15, 'gray', 'strong'))
-
-  if (label !== '') {
-    parts.push(text(label, x + textWidth(count, SIZES.strong) + 5, 15, 'text', 'name'))
-  }
-}
-
-// The state and the latest prompt on the left, the plan's step at the right edge. Below STEP_LABEL_BELOW the step keeps its
-// bar and number and drops its words; the left side is clipped to the room the step leaves.
+// The state and the latest prompt, clipped to the band.
 export function drawStatus(row: StatusRow, guess: number): Image {
-  const step = row.step
-  // A finished plan needs only its full bar.
-  const label = step && !step.isComplete ? fit(step.text, SIZES.name, Math.max(60, guess * 0.3)) : ''
-  const full = step ? stepWidth(step, label) + 14 : 0
-  const short = step ? stepWidth(step, '') + 14 : 0
-  const isShort = guess < STEP_LABEL_BELOW
-  const room = Math.max(0, guess - (isShort ? short : full))
-  const parts = [
-    `<clipPath id="status"><rect id="status-room" x="0" y="0" width="${room}" height="${ROW}"/></clipPath><g clip-path="url(#status)">`,
-  ]
+  const parts = [`<clipPath id="status"><rect x="0" y="0" width="100%" height="${ROW}"/></clipPath><g clip-path="url(#status)">`]
 
-  drawItems(fitItems(row.items, room), parts)
+  drawItems(fitItems(row.items, guess), parts)
   parts.push('</g>')
 
-  if (step === null) {
-    return wrap(parts, ROW, '#status-room{width:100%}')
-  }
+  return wrap(parts, ROW)
+}
 
-  const right = [`<g class="sf"${isShort ? ' display="none"' : ''}>`]
-  drawStep(step, label, row.tone, right)
-  right.push(`</g><g class="ss"${isShort ? '' : ' display="none"'}>`)
-  drawStep(step, '', row.tone, right)
-  right.push('</g>')
-  parts.push(atRightEdge(right.join(''), ROW))
+const PLAN_ROW = 28
+const PLAN_BAR = 24
+const PLAN_INSET = 12
+const SHEEN = 140
 
-  return wrap(
-    parts,
-    ROW,
-    `#status-room{width:max(0px, calc(100% - ${full}px))}` +
-      `@media (max-width:${STEP_LABEL_BELOW - 0.01}px){.sf{display:none}.ss{display:inline}#status-room{width:max(0px, calc(100% - ${short}px))}}`,
-  )
+// A light passing along the fill while the session works.
+const SHEEN_RULES =
+  `.sheen{animation:sheen 2.6s ease-in-out infinite}@keyframes sheen{from{x:-${SHEEN}px}to{x:100%}}` +
+  '@media (prefers-reduced-motion: reduce){.sheen{animation:none;display:none}}'
+
+// The plan as one thick bar across the band, the step written inside it over a fill of the steps done and a fainter one
+// for the step under way; how much is done and the step's number at the right.
+export function drawPlan(step: Step, guess: number, isWorking: boolean): Image {
+  const tone: Tone = step.isComplete ? 'success' : 'sky'
+  const completed = step.states.filter(state => state === 'completed').length
+  const done = completed / step.total
+  const reached = step.isComplete ? 1 : Math.max(done, step.position / step.total)
+  const percent = `${Math.round(done * 100)}%`
+  const count = `${completed}/${step.total}`
+  const countWidth = textWidth(count, SIZES.strong)
+  const right = countWidth + 10 + textWidth(percent, SIZES.strong) + 14
+  const barWidth = Math.max(60, guess - right)
+  const words = step.isComplete ? `All ${step.total} steps done` : `Step ${step.position} · ${step.text}`
+  const label = fit(words, SIZES.strong, barWidth - 2 * PLAN_INSET)
+  const y = (PLAN_ROW - PLAN_BAR) / 2
+  const share = (fraction: number): string => `max(0px, calc((100% - ${right}px) * ${fraction.toFixed(4)}))`
+  const bar = (fraction: number, attributes: string): string =>
+    `<rect ${attributes} x="0" y="${y}" width="${(fraction * barWidth).toFixed(1)}" height="${PLAN_BAR}" style="width:${share(fraction)}"/>`
+  const parts = [
+    `<defs><linearGradient id="fill"><stop offset="0" stop-opacity="0.55" class="stop-${tone}"/><stop offset="1" class="stop-${tone}"/></linearGradient>`,
+    `<linearGradient id="sheen"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset="0.5" stop-color="#fff" stop-opacity="0.22"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>`,
+    `<clipPath id="plan-bar"><rect x="0" y="${y}" width="${barWidth}" height="${PLAN_BAR}" rx="8" style="width:${share(1)}"/></clipPath>`,
+    `<clipPath id="plan-done">${bar(done, '')}</clipPath></defs>`,
+    `<rect class="f-free" x="0" y="${y}" width="${barWidth}" height="${PLAN_BAR}" rx="8" style="width:${share(1)}"/>`,
+    '<g clip-path="url(#plan-bar)">',
+    bar(reached, `class="f-${tone}" opacity="0.18"`),
+    bar(done, 'fill="url(#fill)"'),
+    isWorking ? `<g clip-path="url(#plan-done)"><rect class="sheen" x="-${SHEEN}" y="${y}" width="${SHEEN}" height="${PLAN_BAR}" fill="url(#sheen)"/></g>` : '',
+    text(label, PLAN_INSET, y + 17, 'text', 'strong'),
+    '</g>',
+    atRightEdge(text(percent, -(right - 14), y + 17, 'gray', 'strong') + text(count, -countWidth, y + 17, 'text', 'strong'), PLAN_ROW),
+  ]
+  const stops = `.stop-${tone}{stop-color:${DARK[tone]}}@media (prefers-color-scheme: light){.stop-${tone}{stop-color:${LIGHT[tone]}}}`
+
+  return wrap(parts, PLAN_ROW, stops + (isWorking ? SHEEN_RULES : ''))
+}
+
+// The plan in text, for the terminal.
+export function planText(step: Step, cells: number): string {
+  const done = step.states.filter(state => state === 'completed').length
+  const filled = Math.round((cells * done) / step.total)
+
+  return `${'█'.repeat(filled)}${'░'.repeat(cells - filled)} ${done}/${step.total}`
 }
 
 // An item that would run past the band's edge goes whole, with every item after it.

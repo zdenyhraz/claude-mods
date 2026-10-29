@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { ago, describe, drawAgents, drawContext, drawStatus, drawTop, groupsOf, sessionHue, shorten, sliceTones, statusOf } from '../hooks/look'
+import { ago, describe, drawAgents, drawContext, drawPlan, drawStatus, drawTop, groupsOf, sessionHue, shorten, sliceTones, statusOf, stepOf } from '../hooks/look'
 import { applyPlanUpdate, describeTool, isOwnPrompt, isTestCommand, lastPrompt, pickHue, withHue } from '../hooks/session'
 
 type TestEngine = Parameters<TestBody>[0]
@@ -668,7 +668,9 @@ function fakeTools(on: On, failing: RegExp = /^$/) {
   on('tool.call', (_, e) => {
     const command = String((e as { command?: unknown }).command ?? '')
 
-    return (failing.test(command) ? { result: {}, text: 'failed', isError: true } : { result: {} }) as never
+    const output = (e as { run_in_background?: boolean }).run_in_background === true ? { backgroundTaskId: 'bg-1' } : {}
+
+    return (failing.test(command) ? { result: {}, text: 'failed', isError: true } : { result: output }) as never
   })
   on('prompt.submit', (_, e) => ({ text: e.text }) as never)
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
@@ -704,6 +706,35 @@ test('your latest prompt shows at the top, and the state follows the turn: worki
   await ui.unmount()
 })
 
+test('a turn that leaves work running in the background is not done, and a new prompt drops the last plan', async ($, on) => {
+  fakeGit(on, MAIN_LAYOUT, CLEAN)
+  fakeTools(on)
+  const clock = await start($, on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const steps = [
+    { content: 'Run the tests', status: 'in_progress' },
+    { content: 'Fix what fails', status: 'pending' },
+  ]
+
+  await $.prompt.submit({ text: 'Run the slow suite' } as never)
+  await $.turn.start({ text: 'work', turnId: 't1' })
+  await $.tool.call({ tool: 'mcp__ccd_turn__update_plan', items: steps } as never)
+  await $.tool.call({ tool: 'Bash', command: 'python run_test.py', description: 'Slow test suite', run_in_background: true } as never)
+  await $.turn.complete(ended('t1'))
+  await clock.settle()
+  expect(await shown(ui)).toContain('Running in background Slow test suite just now')
+  expect(await shown(ui)).toContain('plan step 1 of 2')
+
+  await $.tool.call({ tool: 'TaskStop', task_id: 'bg-1' } as never)
+  await clock.settle()
+  expect(await shown(ui)).toContain('Done just now')
+
+  await $.prompt.submit({ text: 'Now something else' } as never)
+  await clock.settle()
+  expect(await shown(ui)).not.toContain('plan step')
+  await ui.unmount()
+})
+
 test('a stopped turn says so, and only what you wrote counts as your prompt', async ($, on) => {
   fakeGit(on, MAIN_LAYOUT, CLEAN)
   fakeTools(on)
@@ -729,22 +760,26 @@ test('a stopped turn says so, and only what you wrote counts as your prompt', as
   await ui.unmount()
 })
 
-test('the plan step follows the task list: a new list, an advance, and the wrap-up', () => {
+test('the plan follows the task list as a bar of its own, and a plan of one step shows none', () => {
   const items = [
     { content: 'Read the code', status: 'in_progress' as const },
     { content: 'Write the fix', status: 'pending' as const },
     { content: 'Run the tests', status: 'pending' as const },
   ]
   const advanced = applyPlanUpdate(applyPlanUpdate([], { items }), { advance: true })
-  const row = statusOf({ phase: 'working', detail: 'Editing look.ts', at: 0 }, 'Fix the nav', advanced, 0)
+  const step = stepOf(advanced)
 
-  expect(row.step).toEqual({ position: 2, total: 3, text: 'Write the fix', states: ['completed', 'in_progress', 'pending'], isComplete: false })
-  expect(applyPlanUpdate(advanced, { done: [2], start: 3 }).map(step => step.status)).toEqual(['completed', 'completed', 'in_progress'])
+  expect(step).toEqual({ position: 2, total: 3, text: 'Write the fix', states: ['completed', 'in_progress', 'pending'], isComplete: false })
+  expect(applyPlanUpdate(advanced, { done: [2], start: 3 }).map(each => each.status)).toEqual(['completed', 'completed', 'in_progress'])
+  expect(stepOf([{ content: 'Commit and push', status: 'completed' }])).toBeNull()
 
-  const image = drawStatus(row, 760)
-  expect(image.source).toContain('>Write the fix</text>')
-  expect(image.source).toContain('>2/3</text>')
-  expect(image.source).toContain('@media (max-width:519.99px)')
+  const image = drawPlan(step!, 760, true)
+  expect(image.source).toContain('>Step 2 · Write the fix</text>')
+  expect(image.source).toContain('>1/3</text>')
+  expect(image.source).toContain('>33%</text>')
+  expect(image.source).toContain('@keyframes sheen')
+  expect(drawPlan(step!, 760, false).source).not.toContain('@keyframes sheen')
+  expect(drawStatus(statusOf({ phase: 'working', detail: 'Editing look.ts', at: 0 }, 'Fix the nav', 0), 760).source).not.toContain('2/3')
 })
 
 test('tool calls read as what the session is doing, and test commands are recognised', () => {
@@ -844,7 +879,7 @@ test('the state leads the status row as a solid chip in its colour', async ($, o
 })
 
 test('the chip keeps its words whole when the row is cut to fit', () => {
-  const row = statusOf({ phase: 'waiting', detail: 'Which of the two search indexes should the band use?', at: 0 }, 'Make the band fill its width at every size', [], 0)
+  const row = statusOf({ phase: 'waiting', detail: 'Which of the two search indexes should the band use?', at: 0 }, 'Make the band fill its width at every size', 0)
   const image = drawStatus(row, 300)
 
   expect(image.source).toContain('>Waiting for you</text>')
@@ -874,6 +909,12 @@ test('a session loaded mid-way takes your latest prompt from its transcript', as
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
 
   expect(await shown(ui)).toContain('Ready · Fix the nav bar on narrow windows')
+  const card = findElement(await ui.drawn(), element => element.type === 'Box' && element.props?.key === 'status')
+  const whole = findElement(card?.children, element => element.type === 'Box' && element.props?.position === 'absolute')
+  expect(whole?.props?.display).toBe('none')
+  expect(whole?.hover).toEqual({ display: 'flex' })
+  expect(await ui.find({ type: 'Text', text: /^Your latest prompt$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^and test it$/ })).toBeDefined()
   expect(lastPrompt([{ role: 'user', text: '[Image #1] what is this' }, { role: 'user', text: '/compact' }])).toBe('what is this')
   expect(lastPrompt([{ role: 'user', text: 'This session is being continued from a previous conversation.' }])).toBeNull()
   await ui.unmount()
@@ -892,13 +933,16 @@ test('worktree colours go round: a new worktree gets the one unused longest, a k
   expect(pickHue(table, 'my-app/new-one', hues)).toBe('violet')
 })
 
-test('a finished plan shows its full bar and no step words', () => {
+test('a finished plan shows its full bar in green and says it is done', () => {
   const done = [
     { content: 'Write the fix', status: 'completed' as const },
     { content: 'Update the README', status: 'completed' as const },
   ]
-  const image = drawStatus(statusOf({ phase: 'done', detail: '', at: 0 }, 'Fix the nav', done, 0), 760)
+  const image = drawPlan(stepOf(done)!, 760, false)
 
   expect(image.source).toContain('>2/2</text>')
+  expect(image.source).toContain('>All 2 steps done</text>')
+  expect(image.source).toContain('>100%</text>')
+  expect(image.source).toContain('class="f-success"')
   expect(image.source).not.toContain('Update the README')
 })

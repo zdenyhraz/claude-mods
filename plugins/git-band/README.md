@@ -7,13 +7,18 @@ sessions. Screenshots are in the [repository README](../../README.md#git-band).
    - **State**, as a solid chip in the state's colour: what the session is doing right now (`Running tests`,
      `Editing look.ts`, `Thinking`) in blue, or `Waiting for you` in amber and what it waits on (a question, a
      plan to approve, the question a turn ended with), or `Done` in green, `Stopped` in grey or `Failed` in red
-     and how long ago; `Ready` before the first turn.
+     and how long ago; `Ready` before the first turn. A turn that ended with work still going (a command sent
+     to the background, a monitor, a subagent) shows `Running in background` in blue and what still runs,
+     until it finishes or is stopped.
    - **Prompt**: the first line of your latest prompt, so what you last asked is in view without scrolling
-     up. Only what you wrote counts, at the prompt, from your phone or through a button of yours; not slash
+     up; on the desktop app, hovering the row shows the whole prompt. Only what you wrote counts, at the prompt, from your phone or through a button of yours; not slash
      commands, notifications or other sessions' messages. Loaded partway through a session, the band reads
      it from the transcript.
-   - **Step**, at the right: the task list's progress as a bar, the step's number and its words, e.g.
-     `▰▰▰▱▱▱ 3/6 Run the test suite`; a finished plan shows its full bar alone.
+   - **Plan**, on a row of its own once the task list has two steps or more: a thick bar across the band
+     with the step written inside it (`Step 3 · Run the test suite`) over a fill of the steps done and a
+     fainter one for the step under way, then how much is done and the steps done (`40%  2/5`). A light
+     passes along the fill while the session works; a finished plan is green and says `All 5 steps done`.
+     A prompt you write between turns clears it until the session makes a new task list.
 2. **Since your prompt**, after your first prompt: how long ago you last wrote, then what happened since,
    subagents' work included: the files edited, the last test run (`tests ✓` or `tests ✗`), the commits and
    the subagents that finished; or `nothing changed`. On the desktop app, hovering it lists the files with

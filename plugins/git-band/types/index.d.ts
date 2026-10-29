@@ -66,6 +66,7 @@ declare module 'claude-code' {
       plan: PlanStep[]
       activity: ActivityView
       hue: string | null
+      background: { id: string; label: string }[]
     }
   }
 }

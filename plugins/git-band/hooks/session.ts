@@ -139,7 +139,19 @@ export function todosOf(args: ToolArgs): PlanStep[] {
 }
 
 const MAX_PROMPT = 160
+const MAX_HELD = 4000
 const IMAGES = /\[Image[^\]]*\]/g
+
+// A prompt's text without its image placeholders, as kept for the hover card; null when nothing is left.
+export function promptText(text: string): string | null {
+  const kept = text.replace(IMAGES, '').trim()
+
+  if (kept === '') {
+    return null
+  }
+
+  return kept.length > MAX_HELD ? `${kept.slice(0, MAX_HELD - 1)}…` : kept
+}
 
 // A prompt's first line of text, flattened and cut.
 export function promptLine(text: string): string | null {
@@ -184,12 +196,43 @@ export function isOwnPrompt(e: Submission): boolean {
   return kind === 'plugin' ? e.origin?.asUser === true : !MACHINE_ORIGINS.has(kind)
 }
 
+export type BackgroundTask = { id: string; label: string }
+
+const MAX_LABEL = 80
+
+const labelOf = (text: string): string => {
+  const flat = text.replace(/\s+/g, ' ').trim()
+
+  return flat.length > MAX_LABEL ? `${flat.slice(0, MAX_LABEL - 1)}…` : flat
+}
+
+// Work a tool call left running after it answered: a command sent to the background, or a monitor.
+export function startedTask(tool: string, args: ToolArgs, output: unknown): BackgroundTask | null {
+  const record = output !== null && typeof output === 'object' ? (output as Record<string, unknown>) : {}
+  const id = tool === 'Monitor' ? record.taskId : tool === 'Bash' || tool === 'PowerShell' ? record.backgroundTaskId : undefined
+
+  if (typeof id !== 'string' || id === '') {
+    return null
+  }
+
+  return { id, label: labelOf(textOf(args.description) || textOf(args.command)) }
+}
+
+// The tasks a task notification reports on.
+export const finishedTasks = (text: string): string[] => [...text.matchAll(/<task-id>\s*([^<\s]+)\s*<\/task-id>/g)].map(match => match[1] ?? '')
+
+type TaskSummary = { id: string; description?: string; command?: string; type?: string }
+
+// What the classic Stop event says is still in flight when the turn ends.
+export const tasksOf = (summaries: readonly TaskSummary[]): BackgroundTask[] =>
+  summaries.map(task => ({ id: task.id, label: labelOf(task.description || task.command || task.type || 'background task') }))
+
 type TranscriptRow = { role: string; text: string; toolResults?: readonly unknown[] }
 
 const SYSTEM_BLOCKS = /<([a-z][\w-]*)[^>]*>[\s\S]*?<\/\1>/gi
 
-// The session's latest prompt of the person's own: system blocks and images stripped, a compaction's summary, slash
-// commands and notices skipped.
+// The session's latest prompt of the person's own, whole: system blocks and images stripped, a compaction's summary,
+// slash commands and notices skipped.
 export function lastPrompt(rows: readonly TranscriptRow[]): string | null {
   for (const row of [...rows].reverse()) {
     if (row.role !== 'user' || (row.toolResults?.length ?? 0) > 0) {
@@ -199,7 +242,7 @@ export function lastPrompt(rows: readonly TranscriptRow[]): string | null {
     const text = row.text.replace(SYSTEM_BLOCKS, '').replace(IMAGES, '').trim()
 
     if (text !== '' && !/^[/[]/.test(text) && !/^This session is being continued/i.test(text)) {
-      return promptLine(text)
+      return promptText(text)
     }
   }
 

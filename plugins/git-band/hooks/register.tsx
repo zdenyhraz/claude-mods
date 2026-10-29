@@ -10,11 +10,13 @@ import {
   describeAgents,
   describeContext,
   describeItems,
+  describePlan,
   describeStatus,
   describeTop,
   detailsOf,
   drawAgents,
   drawContext,
+  drawPlan,
   drawSince,
   drawStatus,
   drawStripe,
@@ -25,11 +27,13 @@ import {
   limitName,
   limitTone,
   orderAgents,
+  planText,
   sessionHue,
   sinceOf,
   sliceTones,
   stateOf,
   statusOf,
+  stepOf,
   hueKey,
   STRIPE_WIDTH,
   WORKTREE_HUES,
@@ -42,11 +46,15 @@ import {
   commandOf,
   describeTool,
   editedPath,
+  finishedTasks,
   isOwnPrompt,
   lastPrompt,
   pickHue,
   promptLine,
+  promptText,
   shortPath,
+  startedTask,
+  tasksOf,
   todosOf,
   waitsFor,
   withCommand,
@@ -71,6 +79,7 @@ const turn = atom({ plugin: 'git-band', key: 'turn' } as const, { phase: 'idle',
 const plan = atom({ plugin: 'git-band', key: 'plan' } as const, [])
 const activity = atom({ plugin: 'git-band', key: 'activity' } as const, NO_ACTIVITY)
 const hue = atom({ plugin: 'git-band', key: 'hue' } as const, null)
+const background = atom({ plugin: 'git-band', key: 'background' } as const, [])
 
 // The terminal draws text alone, so each tone of the desktop's image maps to the theme key nearest it.
 const THEME_KEYS: Record<Tone, Color> = {
@@ -404,14 +413,32 @@ async function loadLatestPrompt($: EngineInterface): Promise<void> {
   }
 }
 
-// A prompt of the person's own shows at the top and starts what "since your prompt" counts.
-async function notePrompt($: EngineInterface, text: string): Promise<void> {
+// A prompt of the person's own shows at the top and starts what "since your prompt" counts. Written between turns it
+// starts new work, so the last turn's plan goes until a new one comes.
+async function notePrompt($: EngineInterface, text: string, wasTurnRunning: boolean): Promise<void> {
   const now = await $.clock.now()
   await update($, activity, () => ({ ...NO_ACTIVITY, since: now }))
-  const line = promptLine(text)
+  await update($, plan, steps => (wasTurnRunning && steps.some(step => step.status !== 'completed') ? steps : []))
+  const kept = promptText(text)
 
-  if (line !== null) {
-    await update($, latestPrompt, () => line)
+  if (kept !== null) {
+    await update($, latestPrompt, () => kept)
+  }
+}
+
+async function endBackground($: EngineInterface, ids: readonly string[]): Promise<void> {
+  if (ids.length > 0) {
+    await update($, background, tasks => tasks.filter(task => !ids.includes(task.id)))
+  }
+}
+
+async function noteBackground($: EngineInterface, tool: string, args: ToolArgs, result: ToolCallResult): Promise<void> {
+  const started = 'result' in result ? startedTask(tool, args, result.result) : null
+
+  if (started !== null) {
+    await update($, background, tasks => [...tasks.filter(task => task.id !== started.id), started])
+  } else if (tool === 'TaskStop') {
+    await endBackground($, [args.task_id, args.shell_id].filter((id): id is string => typeof id === 'string'))
   }
 }
 
@@ -575,6 +602,19 @@ export const register: Register = on => {
     return paths.length === 0 ? result : { ...result, watchPaths: [...(result.watchPaths ?? []), ...paths] }
   })
 
+  // At the end of a turn the engine knows exactly what is still in flight; between turns the tool calls and the task
+  // notifications keep the list.
+  on('classic.Stop', async ($, e, next) => {
+    const result = await next(e)
+
+    if (Array.isArray(e.background_tasks)) {
+      const tasks = tasksOf(e.background_tasks)
+      await update($, background, () => tasks).catch(() => undefined)
+    }
+
+    return result
+  })
+
   on('classic.FileChanged', async ($, e, next) => {
     const result = await next(e)
     scheduleRefresh($)
@@ -602,11 +642,14 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('prompt.submit', async ($, e, next) => {
+    const wasTurnRunning = isTurnRunning
     const result = await next(e)
     void dropFinished($)
 
     if (isOwnPrompt(e)) {
-      void notePrompt($, e.text).catch(() => undefined)
+      void notePrompt($, e.text, wasTurnRunning).catch(() => undefined)
+    } else if (e.origin?.kind === 'task-notification') {
+      void endBackground($, finishedTasks(e.text)).catch(() => undefined)
     }
 
     return result
@@ -634,6 +677,10 @@ export const register: Register = on => {
 
     const result = await next(e)
     void noteToolEnd($, e.tool, args, result, startedAt, isMain).catch(() => undefined)
+
+    if (isMain) {
+      void noteBackground($, e.tool, args, result).catch(() => undefined)
+    }
 
     if (e.agentId !== undefined) {
       void countTool($, e.agentId)
@@ -696,7 +743,11 @@ export const register: Register = on => {
     const board: Dashboard = { git: gitStatus, usage: await read($, usage), agents: await read($, agents), now: await $.clock.now() }
     const [turnNow, promptNow, planNow, activityNow, claimed] = await Promise.all([read($, turn), read($, latestPrompt), read($, plan), read($, activity), read($, hue)])
     board.hue = WORKTREE_HUES.find(tone => tone === claimed) ?? sessionHue(board.git)
-    const statusRow = turnNow.phase !== 'idle' || promptNow !== null || planNow.length > 0 ? statusOf(turnNow, promptNow, planNow, board.now) : null
+    const step = stepOf(planNow)
+    const promptShown = promptNow === null ? null : promptLine(promptNow)
+    const inFlight = [...(await read($, background)).map(task => task.label), ...board.agents.filter(agent => ['pending', 'running', 'waiting'].includes(agent.status)).map(agent => agent.name)]
+    const statusRow = turnNow.phase !== 'idle' || promptShown !== null || step !== null ? statusOf(turnNow, promptShown, board.now, inFlight) : null
+    const isWorking = turnNow.phase === 'working'
     const since = activityNow.since === null ? null : sinceOf(activityNow, board.agents, board.now)
     const shownTimes = [...(['idle', 'working'].includes(turnNow.phase) ? [] : [turnNow.at]), ...(activityNow.since === null ? [] : [activityNow.since])]
     redrawWhenTimesChange($, board.now, shownTimes)
@@ -731,6 +782,12 @@ export const register: Register = on => {
       band = (
         <Box flexDirection="column">
           {statusRow && line(statusRow.items)}
+          {step && (
+            <Box flexDirection="row" columnGap="sm" overflow="hidden">
+              {word(planText(step, 12), step.isComplete ? 'success' : 'sky')}
+              {!step.isComplete && word(`Step ${step.position} · ${step.text}`, 'text')}
+            </Box>
+          )}
           {since && line(since)}
           <Box flexDirection="row" columnGap="md" overflow="hidden">
             {groupsOf(board.git, undefined, board.hue).map(group => (
@@ -769,6 +826,8 @@ export const register: Register = on => {
       const guess = e.props.bodyColumns * PX_PER_COLUMN - STRIPE_WIDTH
       const statusAlt = statusRow ? describeStatus(statusRow) : ''
       const statusImage = statusRow ? cachedImage('status', `${Math.floor(guess)} ${statusAlt}`, () => drawStatus(statusRow, guess)) : null
+      const planAlt = step ? describePlan(step) : ''
+      const planImage = step ? cachedImage('plan', `${Math.floor(guess)} ${isWorking} ${planAlt}`, () => drawPlan(step, guess, isWorking)) : null
       const sinceAlt = since ? describeItems(since) : ''
       const sinceImage = since ? cachedImage('since', sinceAlt, () => drawSince(since)) : null
       const topAlt = describeTop(board)
@@ -782,13 +841,28 @@ export const register: Register = on => {
       const detailsWidth = Math.max(...details.map(line => line.reduce((sum, token) => sum + token.text.length + 3, 0)))
       const sinceCard = sinceDetails(activityNow, board.agents, board.now)
       const sinceWidth = Math.max(...sinceCard.map(entry => entry.text.length + entry.note.length + 4))
-      const rowsHeight = [statusImage, sinceImage, top, context, cards].reduce((sum, image) => sum + (image?.height ?? 0), 0)
+      const rowsHeight = [statusImage, planImage, sinceImage, top, context, cards].reduce((sum, image) => sum + (image?.height ?? 0), 0)
       const stripe = drawStripe(tint, rowsHeight)
 
       // An Svg given no width fills the column Box it is in, so each image is laid out at the band's real width.
       const rows = (
         <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
-          {statusImage && <Svg source={statusImage.source} alt={statusAlt} height={statusImage.height} />}
+          {statusImage && (
+            <Box key="status" flexDirection="column" width="100%">
+              <Svg source={statusImage.source} alt={statusAlt} height={statusImage.height} />
+              {promptNow !== null && (
+                <Box position="absolute" top={0} left={0} width={e.props.bodyColumns} display="none" hover={{ display: 'flex' }} flexDirection="column">
+                  <Text dimColor bold>
+                    Your latest prompt
+                  </Text>
+                  {promptNow.split(/\r?\n/).map(line => (
+                    <Text>{line === '' ? ' ' : line}</Text>
+                  ))}
+                </Box>
+              )}
+            </Box>
+          )}
+          {planImage && <Svg source={planImage.source} alt={planAlt} height={planImage.height} />}
           {sinceImage && (
             <Box key="since" flexDirection="column" width="100%">
               <Svg source={sinceImage.source} alt={sinceAlt} height={sinceImage.height} />
