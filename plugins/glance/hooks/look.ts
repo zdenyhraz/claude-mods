@@ -435,7 +435,7 @@ export type Item = { icon?: { name: Icon; tone: Tone }; tokens: Token[]; chip?: 
 // What an activity item stands for, which picks the list its hover card shows.
 export type SinceTopic = 'files' | 'builds' | 'tests' | 'commits' | 'agents' | 'commands'
 
-export type Step = { position: number; total: number; text: string; states: PlanStep['status'][]; isComplete: boolean }
+export type Step = { position: number; total: number; text: string; texts: string[]; states: PlanStep['status'][]; isComplete: boolean }
 
 export type StatusRow = { items: Item[]; tone: Tone }
 
@@ -464,6 +464,7 @@ export function stepOf(plan: readonly PlanStep[]): Step | null {
     position: current >= 0 ? current + 1 : plan.filter(step => step.status === 'completed').length,
     total: plan.length,
     text: shown.content,
+    texts: plan.map(step => step.content),
     states: plan.map(step => step.status),
     isComplete: plan.every(step => step.status === 'completed'),
   }
@@ -567,8 +568,17 @@ export const describeItems = (items: Item[]): string => items.map(item => item.t
 
 export const describeStatus = (row: StatusRow): string => describeItems(row.items)
 
-export const describePlan = (step: Step): string =>
-  step.isComplete ? `plan ${step.total}/${step.total} done` : `plan step ${step.position} of ${step.total} ${step.text}`
+export function describePlan(step: Step): string {
+  if (step.isComplete) {
+    return `plan ${step.total}/${step.total} done`
+  }
+
+  const index = shownStep(step)
+  const upcoming = index === null ? [] : upcomingSteps(step, index).map(({ words }) => words)
+  const current = `plan step ${step.position} of ${step.total} ${step.text}`
+
+  return upcoming.length > 0 ? `${current}, then ${upcoming.join(', ')}` : current
+}
 
 export function describeDashboard(board: Dashboard): string {
   return [describeTop(board), board.usage ? describeContext(board.usage) : '', describeAgents(board.agents, board.now)].filter(Boolean).join(' · ')
@@ -1123,9 +1133,63 @@ const shownStep = (step: Step): number | null => {
   return current >= 0 ? current : next >= 0 ? next : null
 }
 
+// The steps after the one shown that are still to do, with their numbers.
+function upcomingSteps(step: Step, index: number): { number: number; words: string }[] {
+  return step.texts.flatMap((words, position) => (position > index && step.states[position] !== 'completed' ? [{ number: position + 1, words }] : []))
+}
+
+// A step's number and words cut to the room, else its number alone, else nothing.
+function fitStepLabel(number: number, words: string, room: number): string {
+  const label = fit(`${number} · ${words}`, SIZES.strong, room)
+
+  if (label.length > `${number} · `.length + 1) {
+    return label
+  }
+
+  return textWidth(String(number), SIZES.strong) <= room ? String(number) : ''
+}
+
+type PlanPlacing = {
+  share: (fraction: number) => string
+  at: (fraction: number, content: string, offset?: number) => string
+}
+
+// Where the striped span ends: a share of the bar plus pixels.
+type SpanEnd = { fraction: number; px: number }
+
+// The steps to come, each named in dim words in an equal share of the dark bar after the striped span. Each label is
+// clipped to its share, since the band can be narrower than guessed.
+function drawUpcomingSteps(upcoming: { number: number; words: string }[], end: SpanEnd, barWidth: number, { share, at }: PlanPlacing): string[] {
+  const slots = upcoming.length
+  const rest = 1 - end.fraction
+  const room = (barWidth * rest - end.px) / slots - 2 * PLAN_INSET
+  const y = (PLAN_ROW - PLAN_BAR) / 2
+
+  if (slots === 0 || room <= 0) {
+    return []
+  }
+
+  return upcoming.flatMap(({ number, words }, slot) => {
+    const fraction = end.fraction + (slot * rest) / slots
+    const offset = end.px * (1 - slot / slots)
+    const x = `calc(${share(fraction)} + ${offset.toFixed(1)}px)`
+    const width = `calc(${share(rest / slots)} - ${(end.px / slots).toFixed(1)}px)`
+    const label = fitStepLabel(number, words, room)
+    const guessedX = (barWidth * fraction + offset).toFixed(1)
+
+    return [
+      slot > 0 ? `<rect class="f-line" x="${guessedX}" y="${y}" width="1" height="${PLAN_BAR}" style="x:${x}"/>` : '',
+      label === ''
+        ? ''
+        : `<clipPath id="plan-next-${slot}"><rect x="${guessedX}" y="${y}" width="${(room + 2 * PLAN_INSET).toFixed(1)}" height="${PLAN_BAR}" style="x:${x};width:${width}"/></clipPath>` +
+          `<g clip-path="url(#plan-next-${slot})">${at(fraction, text(label, PLAN_INSET, y + 17, 'gray', 'strong'), offset)}</g>`,
+    ]
+  })
+}
+
 // The plan as one thick bar across the band: the steps done in green, the step under way a striped blue span with its
-// number and words that stretches to fit them, what is left dark; the step's number of all at the right. The stripes
-// move while the session works.
+// number and words that stretches to fit them, the steps to come dark with their words dim; the step's number of all
+// at the right. The stripes move while the session works.
 export function drawPlan(step: Step, guess: number, isWorking: boolean): Image {
   const index = shownStep(step)
   const completed = step.states.filter(state => state === 'completed').length
@@ -1161,9 +1225,16 @@ export function drawPlan(step: Step, guess: number, isWorking: boolean): Image {
     const words = `${index + 1} · ${step.text}`
     const label = fit(words, SIZES.strong, Math.max(barWidth / step.total, barWidth * (1 - start)) - 2 * PLAN_INSET)
     const span = Math.max(barWidth / step.total, Math.min(textWidth(label, SIZES.strong) + 2 * PLAN_INSET, barWidth * (1 - start)))
-    const width = `max(${share(1 / step.total)}, min(${span.toFixed(1)}px, ${share(1 - start)}))`
+    // With the steps to come named after it, the span is either a step's share or its words' pixels, never whichever is
+    // wider at the band's real width, so their labels start where it ends.
+    const isStepWide = span === barWidth / step.total
+    const end = isStepWide ? { fraction: start + 1 / step.total, px: 0 } : { fraction: start, px: span }
+    const upcoming = drawUpcomingSteps(upcomingSteps(step, index), end, barWidth, { share, at })
+    const fittedWidth = isStepWide ? share(1 / step.total) : `${span.toFixed(1)}px`
+    const width = upcoming.length > 0 ? fittedWidth : `max(${share(1 / step.total)}, min(${span.toFixed(1)}px, ${share(1 - start)}))`
     const isUnderWay = step.states[index] === 'in_progress'
     parts.push(
+      ...upcoming,
       `<rect x="${(barWidth * start).toFixed(1)}" y="${y}" width="${span.toFixed(1)}" height="${PLAN_BAR}" fill="url(#stripes)"${isUnderWay ? '' : ' opacity="0.45"'} style="x:${share(start)};width:${width}"/>`,
       at(start, text(label, PLAN_INSET, y + 17, 'ink', 'strong')),
       '</g>',

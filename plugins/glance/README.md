@@ -17,8 +17,9 @@ sessions. Screenshots are in the [repository README](../../README.md#glance).
      transcript.
    - **Plan**, on a row of its own once the task list has two steps or more: a thick bar across the band,
      the steps done in green, the step under way a striped blue span with its number and words
-     (`3 · Run the test suite`) as wide as they need, what is left dark; the step's number of all at the
-     right (`3/5`). The stripes move while the session works; a finished plan is green throughout and says
+     (`3 · Run the test suite`) as wide as they need, what is left dark with each step to come named in dim
+     words in an equal share of it (`4 · Fix the lint errors`), cut short or down to its number where the share
+     is narrow; the step's number of all at the right (`3/5`). The stripes move while the session works; a finished plan is green throughout and says
      `All 5 steps done`. A prompt you write between turns clears it until the session makes a new task list.
 2. **Git**, on two rows so names never crowd the counts:
    - **Names**: the repository (blue, a book icon), then `worktree`, and the fork icon

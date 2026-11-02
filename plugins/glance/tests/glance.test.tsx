@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { ago, describe, drawAgents, drawContext, drawPlan, drawState, drawStatus, drawTop, groupsOf, sessionHue, shorten, sliceTones, statusOf, stepOf } from '../hooks/look'
+import { ago, describe, describePlan, drawAgents, drawContext, drawPlan, drawState, drawStatus, drawTop, groupsOf, sessionHue, shorten, sliceTones, statusOf, stepOf } from '../hooks/look'
 import { applyPlanUpdate, commandDir, commitMessage, describeTool, dirForms, isBuildCommand, isOwnPrompt, isTestCommand, lastPrompt, pickHue, promptText, withHue } from '../hooks/session'
 import { isOwnBase, parseDivergence } from '../hooks/git'
 
@@ -792,7 +792,14 @@ test('the plan follows the task list as a bar of its own, and a plan of one step
   const advanced = applyPlanUpdate(applyPlanUpdate([], { items }), { advance: true })
   const step = stepOf(advanced)
 
-  expect(step).toEqual({ position: 2, total: 3, text: 'Write the fix', states: ['completed', 'in_progress', 'pending'], isComplete: false })
+  expect(step).toEqual({
+    position: 2,
+    total: 3,
+    text: 'Write the fix',
+    texts: ['Read the code', 'Write the fix', 'Run the tests'],
+    states: ['completed', 'in_progress', 'pending'],
+    isComplete: false,
+  })
   expect(applyPlanUpdate(advanced, { done: [2], start: 3 }).map(each => each.status)).toEqual(['completed', 'completed', 'in_progress'])
   expect(stepOf([{ content: 'Commit and push', status: 'completed' }])).toBeNull()
 
@@ -805,6 +812,37 @@ test('the plan follows the task list as a bar of its own, and a plan of one step
   expect(image.source).toContain('animateTransform')
   expect(drawPlan(step!, 760, false).source).not.toContain('animateTransform')
   expect(drawStatus(statusOf({ phase: 'working', detail: 'Editing look.ts', at: 0 }, 'Fix the nav', 0), 760).source).not.toContain('2/3')
+})
+
+test('the steps to come are named in the dark rest of the plan bar, cut to their share of it', () => {
+  const plan = [
+    { content: 'Read the nav bar component', status: 'completed' as const },
+    { content: 'Add a breakpoint hook', status: 'completed' as const },
+    { content: 'Run the test suite', status: 'in_progress' as const },
+    { content: 'Fix the lint errors', status: 'pending' as const },
+    { content: 'Update the changelog', status: 'pending' as const },
+  ]
+  const step = stepOf(plan)!
+  const image = drawPlan(step, 1000, true)
+
+  expect(image.source).toContain('>3 · Run the test suite</text>')
+  expect(image.source).toContain('>4 · Fix the lint errors</text>')
+  expect(image.source).toContain('>5 · Update the changelog</text>')
+  expect(image.source).not.toContain('Add a breakpoint hook')
+  expect(image.source).toContain('clip-path="url(#plan-next-1)"')
+  expect(describePlan(step)).toBe('plan step 3 of 5 Run the test suite, then Fix the lint errors, Update the changelog')
+
+  // A narrower band cuts the words, then keeps only the numbers.
+  expect(drawPlan(step, 760, true).source).toMatch(/>5 · Update [^<]*…<\/text>/)
+  const narrow = drawPlan(step, 430, true).source
+  expect(narrow).toContain('>4</text>')
+  expect(narrow).toContain('>5</text>')
+
+  // A step done out of order is not named again, and the last step names none.
+  const skipped = plan.map((each, position) => (position === 3 ? { ...each, status: 'completed' as const } : each))
+  expect(drawPlan(stepOf(skipped)!, 1000, true).source).not.toContain('Fix the lint errors')
+  const last = plan.map((each, position) => ({ ...each, status: position < 4 ? ('completed' as const) : ('in_progress' as const) }))
+  expect(drawPlan(stepOf(last)!, 1000, true).source).not.toContain('plan-next')
 })
 
 test('tool calls read as what the session is doing, and test commands are recognised', () => {
